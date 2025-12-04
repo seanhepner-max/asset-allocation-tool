@@ -259,11 +259,10 @@ if st.button("Calculate Allocations"):
 
     vehicles = vdf["Vehicle"].tolist()
 
-    # Vehicles with positive availability (for TL)
+    # Vehicles with positive availability (for TL baseline)
     vdf_pos = vdf[vdf["Availability ($)"] > 0].copy()
-    total_avail = vdf_pos["Availability ($)"].sum()
 
-    if total_avail <= 0:
+    if vdf_pos.empty:
         st.error(
             "Total availability across all vehicles is zero or invalid. "
             "Please enter positive values for Cash, Unfunded, or Uncalled Capital."
@@ -302,6 +301,7 @@ if st.button("Calculate Allocations"):
         for idx, row in deals.iterrows():
             deal_name = row.get("Deal", f"Deal {idx+1}") or f"Deal {idx+1}"
 
+            # Skip empty rows
             if (
                 (str(deal_name).strip() == "")
                 and row.get("Term Loan ($)", 0) == 0
@@ -349,51 +349,37 @@ if st.button("Calculate Allocations"):
             alloc_rev = pd.Series(0.0, index=vehicles)
             alloc_ddtl = pd.Series(0.0, index=vehicles)
 
-            # ---- Term Loan: Availability > 0 (no toggles) ----
-            if tl_total > 0 and total_avail > 0:
-                tl_shares = (
-                    vdf_pos.set_index("Vehicle")["Availability ($)"] / total_avail
-                )
-                tl_alloc_raw = tl_shares.reindex(vehicles).fillna(0.0) * tl_total
-                tl_sum = float(tl_alloc_raw.sum())
-                if tl_sum > 0:
-                    alloc_term = tl_alloc_raw * (tl_total / tl_sum)
-                else:
-                    alloc_term = tl_alloc_raw
+            # ---- Term Loan: all vehicles with Availability > 0 ----
+            if tl_total > 0:
+                tl_elig = vdf[vdf["Availability ($)"] > 0].copy()
+                weights = tl_elig.set_index("Vehicle")["Availability ($)"]
+                den = float(weights.sum())
+                if den > 0:
+                    shares = weights / den          # sum(shares) = 1
+                    alloc_term = shares.reindex(vehicles).fillna(0.0) * tl_total
+                    # sum(alloc_term) = tl_total (up to tiny float noise)
 
             # ---- Revolver: Availability > 0 AND Revolver On ----
             if rev_total > 0:
-                rev_mask = (vdf["Availability ($)"] > 0) & (vdf["Revolver On"])
-                rev_elig = vdf[rev_mask].copy()
-                rev_den = rev_elig["Availability ($)"].sum()
-                if rev_den > 0:
-                    rev_shares = (
-                        rev_elig.set_index("Vehicle")["Availability ($)"] / rev_den
-                    )
-                    rev_alloc_raw = rev_shares.reindex(vehicles).fillna(0.0) * rev_total
-                    rev_sum = float(rev_alloc_raw.sum())
-                    if rev_sum > 0:
-                        alloc_rev = rev_alloc_raw * (rev_total / rev_sum)
-                    else:
-                        alloc_rev = rev_alloc_raw
+                rev_elig = vdf[
+                    (vdf["Availability ($)"] > 0) & (vdf["Revolver On"])
+                ].copy()
+                weights = rev_elig.set_index("Vehicle")["Availability ($)"]
+                den = float(weights.sum())
+                if den > 0:
+                    shares = weights / den
+                    alloc_rev = shares.reindex(vehicles).fillna(0.0) * rev_total
 
             # ---- DDTL: Availability > 0 AND DDTL On ----
             if ddtl_total > 0:
-                ddtl_mask = (vdf["Availability ($)"] > 0) & (vdf["DDTL On"])
-                ddtl_elig = vdf[ddtl_mask].copy()
-                ddtl_den = ddtl_elig["Availability ($)"].sum()
-                if ddtl_den > 0:
-                    ddtl_shares = (
-                        ddtl_elig.set_index("Vehicle")["Availability ($)"] / ddtl_den
-                    )
-                    ddtl_alloc_raw = (
-                        ddtl_shares.reindex(vehicles).fillna(0.0) * ddtl_total
-                    )
-                    ddtl_sum = float(ddtl_alloc_raw.sum())
-                    if ddtl_sum > 0:
-                        alloc_ddtl = ddtl_alloc_raw * (ddtl_total / ddtl_sum)
-                    else:
-                        alloc_ddtl = ddtl_alloc_raw
+                ddtl_elig = vdf[
+                    (vdf["Availability ($)"] > 0) & (vdf["DDTL On"])
+                ].copy()
+                weights = ddtl_elig.set_index("Vehicle")["Availability ($)"]
+                den = float(weights.sum())
+                if den > 0:
+                    shares = weights / den
+                    alloc_ddtl = shares.reindex(vehicles).fillna(0.0) * ddtl_total
 
             # -------- Allocation table: facilities x vehicles + totals row --------
             alloc_numeric = pd.DataFrame(
@@ -406,10 +392,8 @@ if st.button("Calculate Allocations"):
                     float(alloc_ddtl.get(veh, 0.0) or 0.0),
                 ]
 
-            # Add a totals row (per vehicle: TL + REV + DDTL)
-            totals_row = {
-                "Facility": "Total",
-            }
+            # Add totals row per vehicle (TL + REV + DDTL for this deal)
+            totals_row = {"Facility": "Total"}
             for veh in vehicles:
                 totals_row[veh] = (
                     float(alloc_term.get(veh, 0.0) or 0.0)
