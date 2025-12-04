@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from datetime import date
 
 st.set_page_config(
     page_title="Multi-Deal Availability Allocation Tool",
@@ -121,14 +122,40 @@ for d in range(int(num_deals)):
     st.markdown("---")
     st.subheader(f"Deal {d+1}")
 
-    # Top-level: deal name
-    deal_name = st.text_input(
-        "Deal Name",
-        value=f"Deal {d+1}",
-        key=f"deal_name_{d}",
-    )
+    # ------------------------------------------------------------------
+    # FIRST ROW (left to right): Deal, Est. Closing Date, New/Amendment,
+    # Transaction Type
+    # ------------------------------------------------------------------
+    row_top = st.columns(4)
+    with row_top[0]:
+        deal_name = st.text_input(
+            "Deal",
+            value=f"Deal {d+1}",
+            key=f"deal_name_{d}",
+        )
+    with row_top[1]:
+        est_closing = st.date_input(
+            "Est. Closing Date",
+            value=date.today(),
+            key=f"closing_{d}",
+        )
+    with row_top[2]:
+        new_or_amend = st.selectbox(
+            "New Deal or Amendment",
+            options=["New Deal", "Amendment"],
+            index=0,
+            key=f"new_or_amend_{d}",
+        )
+    with row_top[3]:
+        transaction_type = st.text_input(
+            "Transaction Type",
+            value="LBO",
+            key=f"txn_type_{d}",
+        )
 
-    # Metrics row: left-to-right
+    # ------------------------------------------------------------------
+    # SECOND ROW (left to right): EBITDA and other metrics boxes
+    # ------------------------------------------------------------------
     mcol1, mcol2, mcol3, mcol4 = st.columns(4)
     with mcol1:
         ebitda = st.number_input(
@@ -190,7 +217,9 @@ for d in range(int(num_deals)):
             key=f"sp_rating_{d}",
         )
 
-    # Facility sizes for this deal
+    # ------------------------------------------------------------------
+    # THIRD ROW: Facility sizes for this deal
+    # ------------------------------------------------------------------
     fcol1, fcol2, fcol3 = st.columns(3)
     with fcol1:
         term_loan_total = st.number_input(
@@ -222,7 +251,10 @@ for d in range(int(num_deals)):
 
     deals.append(
         {
-            "name": deal_name,
+            "Deal": deal_name,
+            "Est. Closing Date": est_closing,
+            "New/Amendment": new_or_amend,
+            "Transaction Type": transaction_type,
             "EBITDA": ebitda,
             "Senior Leverage": senior_lev,
             "Total Leverage": total_lev,
@@ -278,46 +310,34 @@ if st.button("Calculate Allocations for All Deals"):
         # Loop through each deal top-to-bottom
         for idx, deal in enumerate(deals):
             st.markdown("---")
-            st.subheader(f"Deal {idx+1}: {deal['name']}")
+            st.subheader(f"Deal {idx+1}: {deal['Deal']}")
 
-            # -------- Deal metrics box (horizontal) --------
+            # -------- Deal metrics summary in a single-row table --------
+            # Columns as requested: Deal, Est. Closing date, New/Amendment,
+            # Transaction Type, then EBITDA and other metrics.
             metrics_df = pd.DataFrame(
-                {
-                    "Metric": [
-                        "EBITDA ($mm)",
-                        "Senior Net Leverage (x)",
-                        "Total Leverage (x)",
-                        "Opening Spread (bps)",
-                        "Covenant Lite",
-                        "Internal Rating",
-                        "S&P Rating",
-                        "IC Approved Hold ($)",
-                    ],
-                    "Value": [
-                        f"{deal['EBITDA']:,.2f}",
-                        f"{deal['Senior Leverage']:.1f}",
-                        f"{deal['Total Leverage']:.1f}",
-                        f"{deal['Spread']}",
-                        deal["Covenant Lite"],
-                        deal["Internal Rating"],
-                        deal["S&P Rating"],
-                        f"{deal['IC Approved Hold']:,.0f}",
-                    ],
-                }
+                [
+                    {
+                        "Deal": deal["Deal"],
+                        "Est. Closing Date": deal["Est. Closing Date"],
+                        "New Deal or Amendment": deal["New/Amendment"],
+                        "Transaction Type": deal["Transaction Type"],
+                        "EBITDA ($mm)": f"{deal['EBITDA']:,.2f}",
+                        "Senior Net Leverage (x)": f"{deal['Senior Leverage']:.1f}",
+                        "Total Leverage (x)": f"{deal['Total Leverage']:.1f}",
+                        "Opening Spread (bps)": f"{deal['Spread']}",
+                        "Covenant Lite": deal["Covenant Lite"],
+                        "Internal Rating": deal["Internal Rating"],
+                        "S&P Rating": deal["S&P Rating"],
+                        "IC Approved Hold ($)": f"{deal['IC Approved Hold']:,.0f}",
+                    }
+                ]
             )
 
-            # Show metrics row-like
-            mcol_a, mcol_b = st.columns(2)
-            with mcol_a:
-                st.markdown("**Deal Metrics**")
-                st.table(metrics_df.iloc[:4])
-            with mcol_b:
-                st.markdown("**Ratings / Hold**")
-                st.table(metrics_df.iloc[4:])
+            st.markdown("**Deal Summary (Left-to-Right Columns)**")
+            st.dataframe(metrics_df, use_container_width=True)
 
             # -------- Allocation calculations --------
-
-            # Term Loan: all vehicles with Availability > 0
             tl_total = deal["TL"]
             rev_total = deal["REV"]
             ddtl_total = deal["DDTL"]
@@ -326,7 +346,7 @@ if st.button("Calculate Allocations for All Deals"):
             alloc_rev = pd.Series(0.0, index=vehicles_df["Vehicle"])
             alloc_ddtl = pd.Series(0.0, index=vehicles_df["Vehicle"])
 
-            # Term Loan
+            # Term Loan: all vehicles with Availability > 0
             if tl_total > 0 and total_availability > 0:
                 base_shares = vehicles_pos["Availability"] / total_availability
                 alloc_term.loc[vehicles_pos["Vehicle"]] = base_shares * tl_total
