@@ -147,7 +147,6 @@ with left_col:
 with right_col:
     st.subheader("Vehicles / Funds")
 
-    # 👉 Simplified editor: plain numeric inputs, no $ formatting here
     vehicles_df = st.data_editor(
         default_vehicles,
         key="vehicles_editor",
@@ -423,6 +422,44 @@ if st.button("Calculate Allocations"):
             st.markdown("**Facility Allocations (Vehicles Across Columns)**")
             st.dataframe(alloc_fmt.set_index("Facility"), use_container_width=True)
 
+            # -------- Tranche consistency check --------
+            tl_sum = float(alloc_term.sum())
+            rev_sum = float(alloc_rev.sum())
+            ddtl_sum = float(alloc_ddtl.sum())
+
+            check_df = pd.DataFrame(
+                [
+                    {
+                        "Tranche": "Term Loan",
+                        "Tranche Size ($)": fmt_dollars(tl_total),
+                        "Sum of Allocations ($)": fmt_dollars(tl_sum),
+                        "Difference ($)": fmt_dollars(tl_sum - tl_total),
+                    },
+                    {
+                        "Tranche": "Revolver",
+                        "Tranche Size ($)": fmt_dollars(rev_total),
+                        "Sum of Allocations ($)": fmt_dollars(rev_sum),
+                        "Difference ($)": fmt_dollars(rev_sum - rev_total),
+                    },
+                    {
+                        "Tranche": "DDTL",
+                        "Tranche Size ($)": fmt_dollars(ddtl_total),
+                        "Sum of Allocations ($)": fmt_dollars(ddtl_sum),
+                        "Difference ($)": fmt_dollars(ddtl_sum - ddtl_total),
+                    },
+                    {
+                        "Tranche": "TOTAL DEAL",
+                        "Tranche Size ($)": fmt_dollars(deal_total),
+                        "Sum of Allocations ($)": fmt_dollars(tl_sum + rev_sum + ddtl_sum),
+                        "Difference ($)": fmt_dollars(
+                            (tl_sum + rev_sum + ddtl_sum) - deal_total
+                        ),
+                    },
+                ]
+            )
+            st.markdown("**Tranche Consistency Check (Should All Be $0 Difference)**")
+            st.dataframe(check_df, use_container_width=True)
+
             # -------- Pro-rata share by vehicle (DEAL SIZE & Target Hold) --------
             st.markdown("**Pro-Rata Share of Deal by Vehicle (with Target Hold)**")
 
@@ -481,3 +518,4 @@ else:
         "to compute pro-rata allocations by facility and vehicle, plus each vehicle's "
         "pro-rata and % of its Target Hold used for each deal."
     )
+
