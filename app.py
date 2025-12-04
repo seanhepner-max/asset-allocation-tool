@@ -1,440 +1,312 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 st.set_page_config(
-    page_title="Multi-Deal Availability Allocation Tool",
-    layout="wide"
+    page_title="Multi-Deal Availability Allocation Tool (Grid)",
+    layout="wide",
 )
 
-st.title("Multi-Deal Availability-Based Allocation Tool")
+st.title("Multi-Deal Availability-Based Allocation Tool (Grid Version)")
 
 st.caption(
-    "Define vehicles and their availability, then size multiple deals. "
-    "Availability = Cash + Un-called Capital + Unfunded Commitments. "
+    "Edit deals and vehicle availability directly in the tables. "
+    "Availability = Cash + Unfunded Commitments + Uncalled Capital. "
     "Only vehicles with positive availability receive allocations. "
-    "Revolver and DDTL participation is toggled per vehicle. "
-    "Deals are captured in a row-style layout with 'Deals' as the first column."
+    "Revolver and DDTL participation is controlled per vehicle."
 )
 
-# ==========================
-# VEHICLE SETUP (SIDEBAR)
-# ==========================
+# =======================================
+# Helper: build editable AgGrid
+# =======================================
 
-st.sidebar.header("Vehicle Setup")
+def editable_grid(df: pd.DataFrame, key: str, fit_columns: bool = True):
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_default_column(editable=True, resizable=True)
 
-default_vehicle_names = ["Vehicle 1", "Vehicle 2", "Vehicle 3"]
+    if fit_columns:
+        gb.configure_grid_options(domLayout="normal")
 
-num_vehicles = st.sidebar.number_input(
-    "Number of Vehicles",
-    min_value=1,
-    max_value=10,
-    value=3,
-    step=1,
-)
+    grid_options = gb.build()
 
-vehicles_data = []
-
-for i in range(int(num_vehicles)):
-    st.sidebar.markdown(f"**Vehicle {i+1}**")
-    name = st.sidebar.text_input(
-        f"Name {i+1}",
-        value=default_vehicle_names[i] if i < len(default_vehicle_names) else f"Vehicle {i+1}",
-        key=f"name_{i}",
-    )
-    cash = st.sidebar.number_input(
-        f"Cash ($) – {name}",
-        min_value=0.0,
-        value=5_000_000.0,
-        step=500_000.0,
-        format="%.0f",
-        key=f"cash_{i}",
-    )
-    uncalled = st.sidebar.number_input(
-        f"Un-called Capital ($) – {name}",
-        min_value=0.0,
-        value=20_000_000.0,
-        step=1_000_000.0,
-        format="%.0f",
-        key=f"uncalled_{i}",
-    )
-    unfunded = st.sidebar.number_input(
-        f"Unfunded Commitments ($) – {name}",
-        min_value=0.0,
-        value=10_000_000.0,
-        step=1_000_000.0,
-        format="%.0f",
-        key=f"unfunded_{i}",
-    )
-    rev_on = st.sidebar.checkbox(
-        f"Participate in Revolver – {name}",
-        value=True,
-        key=f"rev_on_{i}",
-    )
-    ddtl_on = st.sidebar.checkbox(
-        f"Participate in DDTL – {name}",
-        value=True,
-        key=f"ddtl_on_{i}",
+    grid_response = AgGrid(
+        df,
+        gridOptions=grid_options,
+        update_mode=GridUpdateMode.VALUE_CHANGED,
+        data_return_mode="AS_INPUT",
+        fit_columns_on_grid_load=True,
+        enable_enterprise_modules=False,
+        key=key,
     )
 
-    vehicles_data.append(
+    return pd.DataFrame(grid_response["data"])
+
+
+# =======================================
+# DEFAULT DATA (you can tweak these)
+# =======================================
+
+# Default deals grid: columns in the order of your template
+default_deals = pd.DataFrame(
+    [
         {
-            "Vehicle": name,
-            "Cash": cash,
-            "Un-called Capital": uncalled,
-            "Unfunded Commitments": unfunded,
-            "Revolver On": rev_on,
-            "DDTL On": ddtl_on,
-        }
-    )
-
-# Build vehicle DataFrame and availability once
-vehicles_df = pd.DataFrame(vehicles_data)
-vehicles_df["Availability"] = (
-    vehicles_df["Cash"]
-    + vehicles_df["Un-called Capital"]
-    + vehicles_df["Unfunded Commitments"]
-)
-
-# Only vehicles with positive availability are eligible for Term Loan
-positive_mask = vehicles_df["Availability"] > 0
-vehicles_pos = vehicles_df[positive_mask].copy()
-total_availability = vehicles_pos["Availability"].sum()
-
-# ==========================
-# MULTI-DEAL SETUP (MAIN)
-# ==========================
-
-st.markdown("---")
-st.header("Deals")
-
-num_deals = st.number_input(
-    "Number of Deals",
-    min_value=1,
-    max_value=20,
-    value=3,
-    step=1,
-)
-
-deals = []
-
-for d in range(int(num_deals)):
-    st.markdown("---")
-    st.subheader(f"Deal {d+1}")
-
-    # ----------------------------------------------------
-    # FACILITY SIZES (for this deal)
-    # ----------------------------------------------------
-    fcol1, fcol2, fcol3 = st.columns(3)
-    with fcol1:
-        term_loan_total = st.number_input(
-            "Total Term Loan ($)",
-            min_value=0.0,
-            value=100_000_000.0,
-            step=1_000_000.0,
-            format="%.0f",
-            key=f"tl_{d}",
-        )
-    with fcol2:
-        revolver_total = st.number_input(
-            "Total Revolver ($)",
-            min_value=0.0,
-            value=25_000_000.0,
-            step=1_000_000.0,
-            format="%.0f",
-            key=f"rev_{d}",
-        )
-    with fcol3:
-        ddtl_total = st.number_input(
-            "Total DDTL ($)",
-            min_value=0.0,
-            value=15_000_000.0,
-            step=1_000_000.0,
-            format="%.0f",
-            key=f"ddtl_{d}",
-        )
-
-    st.markdown("**Deal Inputs (Row Layout)**")
-
-    # ----------------------------------------------------
-    # HEADER ROW (column titles) – "Deals" first
-    # ----------------------------------------------------
-    header_cols = st.columns(
-        [
-            1.5,  # Deals
-            1.2,  # Est. Closing
-            1.6,  # New/Amendment
-            1.5,  # Transaction Type
-            1.1,  # EBITDA
-            1.4,  # Senior Lev
-            1.4,  # Total Lev
-            1.3,  # Spread
-            1.2,  # Cov Lite
-            1.4,  # Internal Rating
-            1.1,  # S&P Rating
-            1.8,  # IC Approved Hold
-        ]
-    )
-
-    headers = [
-        "Deals",
-        "Est. Closing Date",
-        "New Deal or Amendment",
-        "Transaction Type",
-        "EBITDA ($mm)",
-        "Senior Net Leverage (x)",
-        "Total Leverage (x)",
-        "Opening Spread (bps)",
-        "Covenant Lite",
-        "Internal Rating",
-        "S&P Rating",
-        "IC Approved Hold ($)",
+            "Deal": "ABC Deal",
+            "Est. Closing Date": "2025-12-05",
+            "New Deal or Amendment": "New Deal",
+            "Transaction Type": "Div Recap",
+            "EBITDA ($mm)": 50.0,
+            "Senior Net Leverage (x)": 3.0,
+            "Total Leverage (x)": 4.0,
+            "Opening Spread (bps)": 400,
+            "Covenant Lite": "Yes",
+            "Internal Rating": "3 (Mid Risk)",
+            "S&P Rating": "B+",
+            "IC Approved Hold ($)": 50_000_000,
+            "Term Loan ($)": 150_000_000,
+            "Revolver ($)": 25_000_000,
+            "DDTL ($)": 5_000_000,
+        },
+        {
+            "Deal": "XXZ Deal",
+            "Est. Closing Date": "2025-12-10",
+            "New Deal or Amendment": "Amendment",
+            "Transaction Type": "LBO",
+            "EBITDA ($mm)": 70.0,
+            "Senior Net Leverage (x)": 3.5,
+            "Total Leverage (x)": 5.0,
+            "Opening Spread (bps)": 425,
+            "Covenant Lite": "No",
+            "Internal Rating": "4 (Higher Risk)",
+            "S&P Rating": "B",
+            "IC Approved Hold ($)": 75_000_000,
+            "Term Loan ($)": 250_000_000,
+            "Revolver ($)": 50_000_000,
+            "DDTL ($)": 15_000_000,
+        },
     ]
+)
 
-    for col, name in zip(header_cols, headers):
-        col.markdown(f"**{name}**")
-
-    # ----------------------------------------------------
-    # INPUT ROW – all fields aligned under headers
-    # ----------------------------------------------------
-    input_cols = st.columns(
-        [
-            1.5, 1.2, 1.6, 1.5, 1.1, 1.4, 1.4, 1.3, 1.2, 1.4, 1.1, 1.8
-        ]
-    )
-
-    with input_cols[0]:
-        deal_name = st.text_input(
-            "",
-            value=f"Deal {d+1}",
-            key=f"deal_name_{d}",
-        )
-
-    with input_cols[1]:
-        est_closing = st.date_input(
-            "",
-            value=date.today(),
-            key=f"closing_{d}",
-        )
-
-    with input_cols[2]:
-        new_or_amend = st.selectbox(
-            "",
-            options=["New Deal", "Amendment"],
-            index=0,
-            key=f"new_or_amend_{d}",
-        )
-
-    with input_cols[3]:
-        transaction_type = st.text_input(
-            "",
-            value="LBO",
-            key=f"txn_type_{d}",
-        )
-
-    with input_cols[4]:
-        ebitda = st.number_input(
-            "",
-            min_value=0.0,
-            value=50.0,
-            step=1.0,
-            format="%.2f",
-            key=f"ebitda_{d}",
-        )
-
-    with input_cols[5]:
-        senior_lev = st.number_input(
-            "",
-            min_value=0.0,
-            value=3.5,
-            step=0.1,
-            format="%.1f",
-            key=f"senior_lev_{d}",
-        )
-
-    with input_cols[6]:
-        total_lev = st.number_input(
-            "",
-            min_value=0.0,
-            value=4.5,
-            step=0.1,
-            format="%.1f",
-            key=f"total_lev_{d}",
-        )
-
-    with input_cols[7]:
-        opening_spread = st.number_input(
-            "",
-            min_value=0,
-            value=400,
-            step=25,
-            key=f"spread_{d}",
-        )
-
-    with input_cols[8]:
-        cov_lite = st.selectbox(
-            "",
-            options=["No", "Yes"],
-            key=f"covlite_{d}",
-        )
-
-    with input_cols[9]:
-        internal_rating = st.text_input(
-            "",
-            value="3 (Mid Risk)",
-            key=f"int_rating_{d}",
-        )
-
-    with input_cols[10]:
-        sp_rating = st.text_input(
-            "",
-            value="B+",
-            key=f"sp_rating_{d}",
-        )
-
-    with input_cols[11]:
-        ic_approved_hold = st.number_input(
-            "",
-            min_value=0.0,
-            value=50_000_000.0,
-            step=1_000_000.0,
-            format="%.0f",
-            key=f"ic_hold_{d}",
-        )
-
-    # Store deal data
-    deals.append(
+# Default vehicles grid: one row per vehicle/fund
+default_vehicles = pd.DataFrame(
+    [
         {
-            "Deal": deal_name,
-            "Est. Closing Date": est_closing,
-            "New/Amendment": new_or_amend,
-            "Transaction Type": transaction_type,
-            "EBITDA": ebitda,
-            "Senior Leverage": senior_lev,
-            "Total Leverage": total_lev,
-            "Spread": opening_spread,
-            "Covenant Lite": cov_lite,
-            "Internal Rating": internal_rating,
-            "S&P Rating": sp_rating,
-            "IC Approved Hold": ic_approved_hold,
-            "TL": term_loan_total,
-            "REV": revolver_total,
-            "DDTL": ddtl_total,
-        }
+            "Vehicle": "Fund 1",
+            "Cash ($)": 5_000_000,
+            "Unfunded Commitments ($)": 5_000_000,
+            "Uncalled Capital ($)": 10_000_000,
+            "Revolver On": True,
+            "DDTL On": True,
+        },
+        {
+            "Vehicle": "Fund 2",
+            "Cash ($)": 5_000_000,
+            "Unfunded Commitments ($)": 5_000_000,
+            "Uncalled Capital ($)": 10_000_000,
+            "Revolver On": True,
+            "DDTL On": False,
+        },
+        {
+            "Vehicle": "Fund 3",
+            "Cash ($)": 5_000_000,
+            "Unfunded Commitments ($)": 5_000_000,
+            "Uncalled Capital ($)": 10_000_000,
+            "Revolver On": False,
+            "DDTL On": True,
+        },
+    ]
+)
+
+# =======================================
+# LAYOUT: Deals grid (left) + Vehicles (right)
+# =======================================
+
+left_col, right_col = st.columns([2.5, 1.5])
+
+with left_col:
+    st.subheader("Deals (edit directly in grid)")
+    st.markdown(
+        "First column is **Deals**, followed by all metrics and facility sizes "
+        "(Term Loan / Revolver / DDTL)."
     )
+
+    num_rows = st.number_input(
+        "Number of deal rows",
+        min_value=1,
+        max_value=50,
+        value=default_deals.shape[0],
+        step=1,
+    )
+
+    # Adjust default_deals rows if the user changes num_rows
+    if num_rows > default_deals.shape[0]:
+        # add blank rows
+        for _ in range(num_rows - default_deals.shape[0]):
+            default_deals = pd.concat(
+                [
+                    default_deals,
+                    pd.DataFrame(
+                        [
+                            {
+                                col: ""
+                                if default_deals[col].dtype == "O"
+                                else 0
+                                for col in default_deals.columns
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
+    elif num_rows < default_deals.shape[0]:
+        default_deals = default_deals.head(num_rows).copy()
+
+    deals_df = editable_grid(default_deals, key="deals_grid")
+
+with right_col:
+    st.subheader("Vehicles / Funds (Availability & Toggles)")
+    st.markdown(
+        "Enter **Cash, Unfunded Commitments, Uncalled Capital** and whether "
+        "each vehicle participates in **Revolver** and **DDTL**. "
+        "Availability is computed automatically in the allocation step."
+    )
+
+    vehicles_df = editable_grid(default_vehicles, key="vehicles_grid")
 
 st.markdown("---")
 
-# ==========================
-# CALCULATE ALLOCATIONS
-# ==========================
+# =======================================
+# Allocation logic
+# =======================================
 
-if st.button("Calculate Allocations for All Deals"):
-    if total_availability <= 0:
+def compute_availability(vdf: pd.DataFrame) -> pd.DataFrame:
+    df = vdf.copy()
+    # Coerce numeric columns
+    for col in ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    df["Availability ($)"] = (
+        df["Cash ($)"] + df["Unfunded Commitments ($)"] + df["Uncalled Capital ($)"]
+    )
+    return df
+
+
+def safe_float(x):
+    try:
+        return float(x)
+    except Exception:
+        return 0.0
+
+
+if st.button("Calculate Allocations"):
+    # --- Clean vehicles & availability ---
+    vdf = compute_availability(vehicles_df)
+    positive_mask = vdf["Availability ($)"] > 0
+    vdf_pos = vdf[positive_mask].copy()
+    total_avail = vdf_pos["Availability ($)"].sum()
+
+    if total_avail <= 0:
         st.error(
-            "Total availability across all vehicles is zero. "
-            "Please enter positive availability (Cash + Un-called + Unfunded)."
+            "Total availability across all vehicles is zero or invalid. "
+            "Please enter positive values for Cash, Unfunded, or Uncalled Capital."
         )
     else:
-        # Show a summary of vehicles and availability once (top)
+        # Show availability summary
         st.subheader("Vehicle Availability Summary")
-
-        avail_display_cols = [
-            "Vehicle",
-            "Cash",
-            "Un-called Capital",
-            "Unfunded Commitments",
-            "Availability",
-            "Revolver On",
-            "DDTL On",
-        ]
-
         st.dataframe(
-            vehicles_df[avail_display_cols].style.format(
-                {
-                    "Cash": "{:,.0f}",
-                    "Un-called Capital": "{:,.0f}",
-                    "Unfunded Commitments": "{:,.0f}",
-                    "Availability": "{:,.0f}",
-                }
-            ),
+            vdf[
+                [
+                    "Vehicle",
+                    "Cash ($)",
+                    "Unfunded Commitments ($)",
+                    "Uncalled Capital ($)",
+                    "Availability ($)",
+                    "Revolver On",
+                    "DDTL On",
+                ]
+            ],
             use_container_width=True,
         )
 
-        # Loop through each deal top-to-bottom
-        for idx, deal in enumerate(deals):
-            st.markdown("---")
-            st.subheader(f"Deal {idx+1}: {deal['Deal']}")
+        # --- Loop through deals and allocate per deal ---
+        for idx, row in deals_df.iterrows():
+            deal_name = str(row.get("Deal", f"Deal {idx+1}")).strip()
+            if not deal_name:
+                deal_name = f"Deal {idx+1}"
 
-            # -------- Deal summary as one-row table, left-to-right columns --------
-            metrics_df = pd.DataFrame(
+            st.markdown("---")
+            st.subheader(f"Deal {idx+1}: {deal_name}")
+
+            # Build a one-row summary like your template (Deals first column)
+            summary = pd.DataFrame(
                 [
                     {
-                        "Deals": deal["Deal"],
-                        "Est. Closing Date": deal["Est. Closing Date"],
-                        "New Deal or Amendment": deal["New/Amendment"],
-                        "Transaction Type": deal["Transaction Type"],
-                        "EBITDA ($mm)": f"{deal['EBITDA']:,.2f}",
-                        "Senior Net Leverage (x)": f"{deal['Senior Leverage']:.1f}",
-                        "Total Leverage (x)": f"{deal['Total Leverage']:.1f}",
-                        "Opening Spread (bps)": f"{deal['Spread']}",
-                        "Covenant Lite": deal["Covenant Lite"],
-                        "Internal Rating": deal["Internal Rating"],
-                        "S&P Rating": deal["S&P Rating"],
-                        "IC Approved Hold ($)": f"{deal['IC Approved Hold']:,.0f}",
+                        "Deals": deal_name,
+                        "Est. Closing Date": row.get("Est. Closing Date", ""),
+                        "New Deal or Amendment": row.get("New Deal or Amendment", ""),
+                        "Transaction Type": row.get("Transaction Type", ""),
+                        "EBITDA ($mm)": safe_float(row.get("EBITDA ($mm)", 0)),
+                        "Senior Net Leverage (x)": safe_float(
+                            row.get("Senior Net Leverage (x)", 0)
+                        ),
+                        "Total Leverage (x)": safe_float(
+                            row.get("Total Leverage (x)", 0)
+                        ),
+                        "Opening Spread (bps)": safe_float(
+                            row.get("Opening Spread (bps)", 0)
+                        ),
+                        "Covenant Lite": row.get("Covenant Lite", ""),
+                        "Internal Rating": row.get("Internal Rating", ""),
+                        "S&P Rating": row.get("S&P Rating", ""),
+                        "IC Approved Hold ($)": safe_float(
+                            row.get("IC Approved Hold ($)", 0)
+                        ),
                     }
                 ]
             )
 
-            st.markdown("**Deal Summary (Row Layout)**")
-            st.dataframe(metrics_df, use_container_width=True)
+            st.markdown("**Deal Summary (row-style, matching template order)**")
+            st.dataframe(summary, use_container_width=True)
 
-            # -------- Allocation calculations --------
-            tl_total = deal["TL"]
-            rev_total = deal["REV"]
-            ddtl_total = deal["DDTL"]
+            # --- Get facility sizes for this deal ---
+            tl_total = safe_float(row.get("Term Loan ($)", 0))
+            rev_total = safe_float(row.get("Revolver ($)", 0))
+            ddtl_total = safe_float(row.get("DDTL ($)", 0))
 
-            alloc_term = pd.Series(0.0, index=vehicles_df["Vehicle"])
-            alloc_rev = pd.Series(0.0, index=vehicles_df["Vehicle"])
-            alloc_ddtl = pd.Series(0.0, index=vehicles_df["Vehicle"])
+            # Initialize allocation vectors
+            alloc_term = pd.Series(0.0, index=vdf["Vehicle"])
+            alloc_rev = pd.Series(0.0, index=vdf["Vehicle"])
+            alloc_ddtl = pd.Series(0.0, index=vdf["Vehicle"])
 
-            # Term Loan: all vehicles with Availability > 0
-            if tl_total > 0 and total_availability > 0:
-                base_shares = vehicles_pos["Availability"] / total_availability
-                alloc_term.loc[vehicles_pos["Vehicle"]] = base_shares * tl_total
+            # ---- Term Loan: all vehicles with Availability > 0 (no toggles) ----
+            if tl_total > 0 and total_avail > 0:
+                base_shares = vdf_pos["Availability ($)"] / total_avail
+                alloc_term.loc[vdf_pos["Vehicle"]] = base_shares * tl_total
 
-            # Revolver: only Availability > 0 AND Revolver On
+            # ---- Revolver: Availability > 0 and Revolver On == True ----
             if rev_total > 0:
-                rev_mask = (vehicles_df["Availability"] > 0) & (vehicles_df["Revolver On"])
-                rev_denominator = vehicles_df.loc[rev_mask, "Availability"].sum()
-                if rev_denominator > 0:
-                    rev_shares = (
-                        vehicles_df.loc[rev_mask, "Availability"] / rev_denominator
-                    )
-                    alloc_rev.loc[vehicles_df.loc[rev_mask, "Vehicle"]] = (
+                rev_mask = (vdf["Availability ($)"] > 0) & (vdf["Revolver On"] == True)
+                rev_den = vdf.loc[rev_mask, "Availability ($)"].sum()
+                if rev_den > 0:
+                    rev_shares = vdf.loc[rev_mask, "Availability ($)"] / rev_den
+                    alloc_rev.loc[vdf.loc[rev_mask, "Vehicle"]] = (
                         rev_shares * rev_total
                     )
 
-            # DDTL: only Availability > 0 AND DDTL On
+            # ---- DDTL: Availability > 0 and DDTL On == True ----
             if ddtl_total > 0:
-                ddtl_mask = (vehicles_df["Availability"] > 0) & (vehicles_df["DDTL On"])
-                ddtl_denominator = vehicles_df.loc[ddtl_mask, "Availability"].sum()
-                if ddtl_denominator > 0:
-                    ddtl_shares = (
-                        vehicles_df.loc[ddtl_mask, "Availability"] / ddtl_denominator
-                    )
-                    alloc_ddtl.loc[vehicles_df.loc[ddtl_mask, "Vehicle"]] = (
+                ddtl_mask = (vdf["Availability ($)"] > 0) & (vdf["DDTL On"] == True)
+                ddtl_den = vdf.loc[ddtl_mask, "Availability ($)"].sum()
+                if ddtl_den > 0:
+                    ddtl_shares = vdf.loc[ddtl_mask, "Availability ($)"] / ddtl_den
+                    alloc_ddtl.loc[vdf.loc[ddtl_mask, "Vehicle"]] = (
                         ddtl_shares * ddtl_total
                     )
 
-            # Build an allocation table with vehicles across the top
-            alloc_df = pd.DataFrame(
-                {
-                    "Facility": ["Term Loan", "Revolver", "DDTL"],
-                }
-            )
+            # ---- Build allocation table: facilities as rows, vehicles as columns ----
+            alloc_df = pd.DataFrame({"Facility": ["Term Loan", "Revolver", "DDTL"]})
 
-            for v in vehicles_df["Vehicle"]:
+            for v in vdf["Vehicle"]:
                 alloc_df[v] = [
                     alloc_term.loc[v],
                     alloc_rev.loc[v],
@@ -450,4 +322,7 @@ if st.button("Calculate Allocations for All Deals"):
             )
 
 else:
-    st.info("Define vehicles and deals, then click **Calculate Allocations for All Deals**.")
+    st.info(
+        "Edit the Deals and Vehicles grids above, then click **Calculate Allocations** "
+        "to compute pro-rata allocations by facility and vehicle."
+    )
