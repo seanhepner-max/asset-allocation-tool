@@ -1,3 +1,4 @@
+import math
 import streamlit as st
 import pandas as pd
 
@@ -89,7 +90,7 @@ default_vehicles = pd.DataFrame(
 )
 
 # =======================================
-# LAYOUT: Deals table (left) + Vehicles (right)
+# LAYOUT: Deals (left) + Vehicles (right)
 # =======================================
 
 left_col, right_col = st.columns([2.5, 1.5])
@@ -216,18 +217,23 @@ def compute_availability(vdf: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def fmt_dollars(x: float) -> str:
+def fmt_dollars(x) -> str:
+    # Treat NaN / None / invalid as 0
     try:
-        return f"${x:,.0f}"
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            x = 0.0
+        return f"${float(x):,.0f}"
     except Exception:
-        return ""
+        return "$0"
 
 
-def fmt_percent(x: float) -> str:
+def fmt_percent(x) -> str:
     try:
-        return f"{x:,.2f}%"
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            x = 0.0
+        return f"{float(x):,.2f}%"
     except Exception:
-        return ""
+        return "0.00%"
 
 
 # =======================================
@@ -285,7 +291,7 @@ if st.button("Calculate Allocations"):
             st.markdown("---")
             st.subheader(f"Deal {idx+1}: {deal_name}")
 
-            # Deal summary
+            # -------- Deal summary --------
             summary = pd.DataFrame(
                 [
                     {
@@ -308,13 +314,13 @@ if st.button("Calculate Allocations"):
             st.markdown("**Deal Summary**")
             st.dataframe(summary, use_container_width=True)
 
-            # Facility sizes (DEAL SIZE)
+            # -------- Facility sizes (DEAL SIZE) --------
             tl_total = row.get("Term Loan ($)", 0.0)
             rev_total = row.get("Revolver ($)", 0.0)
             ddtl_total = row.get("DDTL ($)", 0.0)
-            deal_total = tl_total + rev_total + ddtl_total
+            deal_total = float(tl_total + rev_total + ddtl_total)
 
-            # Init allocation vectors
+            # Init allocation vectors (numeric)
             alloc_term = pd.Series(0.0, index=vdf["Vehicle"])
             alloc_rev = pd.Series(0.0, index=vdf["Vehicle"])
             alloc_ddtl = pd.Series(0.0, index=vdf["Vehicle"])
@@ -322,7 +328,8 @@ if st.button("Calculate Allocations"):
             # Term Loan: all positive-availability vehicles
             if tl_total > 0 and total_avail > 0:
                 base_shares = vdf_pos["Availability ($)"] / total_avail
-                alloc_term.loc[vdf_pos["Vehicle"]] = base_shares * tl_total
+                for veh, share in base_shares.items():
+                    alloc_term.loc[veh] = share * tl_total
 
             # Revolver: positive availability + Revolver On
             if rev_total > 0:
@@ -330,9 +337,8 @@ if st.button("Calculate Allocations"):
                 rev_den = vdf.loc[rev_mask, "Availability ($)"].sum()
                 if rev_den > 0:
                     rev_shares = vdf.loc[rev_mask, "Availability ($)"] / rev_den
-                    alloc_rev.loc[vdf.loc[rev_mask, "Vehicle"]] = (
-                        rev_shares * rev_total
-                    )
+                    for veh, share in rev_shares.items():
+                        alloc_rev.loc[veh] = share * rev_total
 
             # DDTL: positive availability + DDTL On
             if ddtl_total > 0:
@@ -340,43 +346,44 @@ if st.button("Calculate Allocations"):
                 ddtl_den = vdf.loc[ddtl_mask, "Availability ($)"].sum()
                 if ddtl_den > 0:
                     ddtl_shares = vdf.loc[ddtl_mask, "Availability ($)"] / ddtl_den
-                    alloc_ddtl.loc[vdf.loc[ddtl_mask, "Vehicle"]] = (
-                        ddtl_shares * ddtl_total
-                    )
+                    for veh, share in ddtl_shares.items():
+                        alloc_ddtl.loc[veh] = share * ddtl_total
 
-            # Allocation table: facilities as rows, vehicles as columns
-            alloc_df = pd.DataFrame({"Facility": ["Term Loan", "Revolver", "DDTL"]})
-            for v in vdf["Vehicle"]:
-                alloc_df[v] = [
-                    alloc_term.loc[v],
-                    alloc_rev.loc[v],
-                    alloc_ddtl.loc[v],
-                ]
-            # Format to $ strings
-            alloc_fmt = alloc_df.copy()
-            for v in vdf["Vehicle"]:
-                alloc_fmt[v] = alloc_fmt[v].apply(fmt_dollars)
+            # -------- Allocation table: facilities x vehicles --------
+            alloc_numeric = pd.DataFrame({"Facility": ["Term Loan", "Revolver", "DDTL"]})
+            for veh in vdf["Vehicle"]:
+                # use .get on the series to avoid any missing labels
+                tl_val = alloc_term.get(veh, 0.0)
+                rev_val = alloc_rev.get(veh, 0.0)
+                ddtl_val = alloc_ddtl.get(veh, 0.0)
+                alloc_numeric[veh] = [tl_val, rev_val, ddtl_val]
+
+            # Format to $ strings for display
+            alloc_fmt = alloc_numeric.copy()
+            for veh in vdf["Vehicle"]:
+                alloc_fmt[veh] = alloc_fmt[veh].apply(fmt_dollars)
 
             st.markdown("**Facility Allocations (Vehicles Across Columns)**")
             st.dataframe(alloc_fmt.set_index("Facility"), use_container_width=True)
 
-            # Pro-rata share by vehicle (based on DEAL SIZE)
+            # -------- Pro-rata share by vehicle (based on DEAL SIZE) --------
             st.markdown("**Pro-Rata Share of Deal by Vehicle**")
 
             vehicle_total_alloc = alloc_term + alloc_rev + alloc_ddtl
             pro_rata_df = pd.DataFrame(
                 {
                     "Vehicle": vdf["Vehicle"],
-                    "Allocated ($)": vehicle_total_alloc.values,
+                    "Allocated ($)": [vehicle_total_alloc.get(veh, 0.0) for veh in vdf["Vehicle"]],
                 }
             )
 
             pro_rata_df["Allocated ($)"] = pro_rata_df["Allocated ($)"].apply(fmt_dollars)
 
             if deal_total > 0:
-                pro_rata_df["Pro-Rata Share (%)"] = (
-                    (vehicle_total_alloc / deal_total) * 100
-                ).apply(fmt_percent)
+                pro_rata_df["Pro-Rata Share (%)"] = [
+                    fmt_percent(vehicle_total_alloc.get(veh, 0.0) / deal_total * 100.0)
+                    for veh in vdf["Vehicle"]
+                ]
             else:
                 pro_rata_df["Pro-Rata Share (%)"] = ""
 
