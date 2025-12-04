@@ -14,7 +14,8 @@ st.caption(
     "Edit deals and vehicle availability directly in the tables. "
     "Availability = Cash + Unfunded Commitments + Uncalled Capital. "
     "Only vehicles with positive availability receive allocations. "
-    "Revolver and DDTL participation is controlled per vehicle."
+    "Revolver and DDTL participation is controlled per vehicle. "
+    "Pro-rata share of each deal by fund is computed from these allocations."
 )
 
 # =======================================
@@ -273,6 +274,8 @@ if st.button("Calculate Allocations"):
             rev_total = safe_float(row.get("Revolver ($)", 0))
             ddtl_total = safe_float(row.get("DDTL ($)", 0))
 
+            deal_total = tl_total + rev_total + ddtl_total
+
             # Initialize allocation vectors
             alloc_term = pd.Series(0.0, index=vdf["Vehicle"])
             alloc_rev = pd.Series(0.0, index=vdf["Vehicle"])
@@ -321,8 +324,39 @@ if st.button("Calculate Allocations"):
                 use_container_width=True,
             )
 
+            # ---- NEW: Pro-rata share of deal by vehicle/fund ----
+            st.markdown("**Pro-Rata Share of Deal by Vehicle**")
+
+            # Total allocation per vehicle = TL + REV + DDTL
+            vehicle_total_alloc = alloc_term + alloc_rev + alloc_ddtl
+
+            pro_rata_df = pd.DataFrame(
+                {
+                    "Vehicle": vdf["Vehicle"],
+                    "Allocated ($)": vehicle_total_alloc.values,
+                }
+            )
+
+            if deal_total > 0:
+                pro_rata_df["Pro-Rata Share (%)"] = (
+                    pro_rata_df["Allocated ($)"] / deal_total * 100.0
+                )
+            else:
+                pro_rata_df["Pro-Rata Share (%)"] = 0.0
+
+            st.dataframe(
+                pro_rata_df.style.format(
+                    {
+                        "Allocated ($)": "{:,.0f}",
+                        "Pro-Rata Share (%)": "{:,.2f}",
+                    }
+                ),
+                use_container_width=True,
+            )
+
 else:
     st.info(
         "Edit the Deals and Vehicles grids above, then click **Calculate Allocations** "
-        "to compute pro-rata allocations by facility and vehicle."
+        "to compute pro-rata allocations by facility and vehicle, plus each vehicle's "
+        "pro-rata share of the total deal."
     )
