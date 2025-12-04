@@ -144,16 +144,16 @@ with right_col:
         use_container_width=True,
         column_config={
             "Cash ($)": st.column_config.NumberColumn(
-                "Cash ($)", format="%.0f"
+                "Cash ($)", format="$%,.0f"
             ),
             "Unfunded Commitments ($)": st.column_config.NumberColumn(
-                "Unfunded Commitments ($)", format="%.0f"
+                "Unfunded Commitments ($)", format="$%,.0f"
             ),
             "Uncalled Capital ($)": st.column_config.NumberColumn(
-                "Uncalled Capital ($)", format="%.0f"
+                "Uncalled Capital ($)", format="$%,.0f"
             ),
             "Target Hold ($)": st.column_config.NumberColumn(
-                "Target Hold ($)", format="%.0f"
+                "Target Hold ($)", format="$%,.0f"
             ),
             "Revolver On": st.column_config.CheckboxColumn("Revolver On"),
             "DDTL On": st.column_config.CheckboxColumn("DDTL On"),
@@ -355,7 +355,6 @@ if st.button("Calculate Allocations"):
                     vdf_pos.set_index("Vehicle")["Availability ($)"] / total_avail
                 )
                 tl_alloc_raw = tl_shares.reindex(vehicles).fillna(0.0) * tl_total
-                # Renormalize to ensure sum == tl_total
                 tl_sum = float(tl_alloc_raw.sum())
                 if tl_sum > 0:
                     alloc_term = tl_alloc_raw * (tl_total / tl_sum)
@@ -396,7 +395,7 @@ if st.button("Calculate Allocations"):
                     else:
                         alloc_ddtl = ddtl_alloc_raw
 
-            # -------- Allocation table: facilities x vehicles --------
+            # -------- Allocation table: facilities x vehicles + totals row --------
             alloc_numeric = pd.DataFrame(
                 {"Facility": ["Term Loan", "Revolver", "DDTL"]}
             )
@@ -407,9 +406,20 @@ if st.button("Calculate Allocations"):
                     float(alloc_ddtl.get(veh, 0.0) or 0.0),
                 ]
 
-            # For sanity: sums per row match tranche sizes
-            # (not shown, but you can verify if needed)
-            # tl_check = alloc_numeric.loc[alloc_numeric["Facility"] == "Term Loan", vehicles].values.sum()
+            # Add a totals row (per vehicle: TL + REV + DDTL)
+            totals_row = {
+                "Facility": "Total",
+            }
+            for veh in vehicles:
+                totals_row[veh] = (
+                    float(alloc_term.get(veh, 0.0) or 0.0)
+                    + float(alloc_rev.get(veh, 0.0) or 0.0)
+                    + float(alloc_ddtl.get(veh, 0.0) or 0.0)
+                )
+            alloc_numeric = pd.concat(
+                [alloc_numeric, pd.DataFrame([totals_row])],
+                ignore_index=True,
+            )
 
             alloc_fmt = alloc_numeric.copy()
             for veh in vehicles:
