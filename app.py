@@ -14,7 +14,8 @@ st.caption(
     "Availability = Cash + Unfunded Commitments + Uncalled Capital. "
     "Only vehicles with positive availability receive allocations. "
     "Revolver and DDTL participation is controlled per vehicle. "
-    "Pro-rata share of each deal by fund is computed from these allocations."
+    "Target Hold is defined by fund and used to show % of target used per deal. "
+    "Allocations are pro-rata by availability off deal size (Term Loan + Revolver + DDTL)."
 )
 
 # =======================================
@@ -67,6 +68,7 @@ default_vehicles = pd.DataFrame(
             "Cash ($)": 5_000_000,
             "Unfunded Commitments ($)": 5_000_000,
             "Uncalled Capital ($)": 10_000_000,
+            "Target Hold ($)": 40_000_000,
             "Revolver On": True,
             "DDTL On": True,
         },
@@ -75,6 +77,7 @@ default_vehicles = pd.DataFrame(
             "Cash ($)": 5_000_000,
             "Unfunded Commitments ($)": 5_000_000,
             "Uncalled Capital ($)": 10_000_000,
+            "Target Hold ($)": 30_000_000,
             "Revolver On": True,
             "DDTL On": False,
         },
@@ -83,6 +86,7 @@ default_vehicles = pd.DataFrame(
             "Cash ($)": 5_000_000,
             "Unfunded Commitments ($)": 5_000_000,
             "Uncalled Capital ($)": 10_000_000,
+            "Target Hold ($)": 20_000_000,
             "Revolver On": False,
             "DDTL On": True,
         },
@@ -147,6 +151,9 @@ with right_col:
             "Uncalled Capital ($)": st.column_config.NumberColumn(
                 "Uncalled Capital ($)", format="%.0f"
             ),
+            "Target Hold ($)": st.column_config.NumberColumn(
+                "Target Hold ($)", format="%.0f"
+            ),
             "Revolver On": st.column_config.CheckboxColumn("Revolver On"),
             "DDTL On": st.column_config.CheckboxColumn("DDTL On"),
         },
@@ -194,7 +201,7 @@ def clean_deals(df: pd.DataFrame) -> pd.DataFrame:
 def clean_vehicles(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    num_cols = ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)"]
+    num_cols = ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)", "Target Hold ($)"]
     for col in num_cols:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
@@ -218,7 +225,6 @@ def compute_availability(vdf: pd.DataFrame) -> pd.DataFrame:
 
 
 def fmt_dollars(x) -> str:
-    # Treat NaN / None / invalid as 0
     try:
         if x is None or (isinstance(x, float) and math.isnan(x)):
             x = 0.0
@@ -265,12 +271,13 @@ if st.button("Calculate Allocations"):
                 "Unfunded Commitments ($)",
                 "Uncalled Capital ($)",
                 "Availability ($)",
+                "Target Hold ($)",
                 "Revolver On",
                 "DDTL On",
             ]
         ].copy()
 
-        for col in ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)", "Availability ($)"]:
+        for col in ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)", "Availability ($)", "Target Hold ($)"]:
             avail_display[col] = avail_display[col].apply(fmt_dollars)
 
         st.dataframe(avail_display, use_container_width=True)
@@ -352,7 +359,6 @@ if st.button("Calculate Allocations"):
             # -------- Allocation table: facilities x vehicles --------
             alloc_numeric = pd.DataFrame({"Facility": ["Term Loan", "Revolver", "DDTL"]})
             for veh in vdf["Vehicle"]:
-                # use .get on the series to avoid any missing labels
                 tl_val = alloc_term.get(veh, 0.0)
                 rev_val = alloc_rev.get(veh, 0.0)
                 ddtl_val = alloc_ddtl.get(veh, 0.0)
@@ -366,26 +372,55 @@ if st.button("Calculate Allocations"):
             st.markdown("**Facility Allocations (Vehicles Across Columns)**")
             st.dataframe(alloc_fmt.set_index("Facility"), use_container_width=True)
 
-            # -------- Pro-rata share by vehicle (based on DEAL SIZE) --------
-            st.markdown("**Pro-Rata Share of Deal by Vehicle**")
+            # -------- Pro-rata share by vehicle (based on DEAL SIZE & Target Hold) --------
+            st.markdown("**Pro-Rata Share of Deal by Vehicle (with Target Hold)**")
 
             vehicle_total_alloc = alloc_term + alloc_rev + alloc_ddtl
-            pro_rata_df = pd.DataFrame(
+            pro_rata_numeric = pd.DataFrame(
                 {
                     "Vehicle": vdf["Vehicle"],
-                    "Allocated ($)": [vehicle_total_alloc.get(veh, 0.0) for veh in vdf["Vehicle"]],
+                    "Allocated_numeric": [
+                        vehicle_total_alloc.get(veh, 0.0) for veh in vdf["Vehicle"]
+                    ],
+                    "Target_numeric": [
+                        vdf.set_index("Vehicle").loc[veh, "Target Hold ($)"]
+                        if veh in vdf["Vehicle"].values
+                        else 0.0
+                        for veh in vdf["Vehicle"]
+                    ],
                 }
             )
 
-            pro_rata_df["Allocated ($)"] = pro_rata_df["Allocated ($)"].apply(fmt_dollars)
+            # Build display table
+            pro_rata_df = pd.DataFrame()
+            pro_rata_df["Vehicle"] = pro_rata_numeric["Vehicle"]
+            pro_rata_df["Allocated ($)"] = pro_rata_numeric["Allocated_numeric"].apply(
+                fmt_dollars
+            )
+            pro_rata_df["Target Hold ($)"] = pro_rata_numeric["Target_numeric"].apply(
+                fmt_dollars
+            )
 
+            # % of Deal
             if deal_total > 0:
-                pro_rata_df["Pro-Rata Share (%)"] = [
-                    fmt_percent(vehicle_total_alloc.get(veh, 0.0) / deal_total * 100.0)
-                    for veh in vdf["Vehicle"]
+                pro_rata_df["Pro-Rata Share of Deal (%)"] = [
+                    fmt_percent(a / deal_total * 100.0)
+                    for a in pro_rata_numeric["Allocated_numeric"]
                 ]
             else:
-                pro_rata_df["Pro-Rata Share (%)"] = ""
+                pro_rata_df["Pro-Rata Share of Deal (%)"] = ""
+
+            # % of Target Hold used (for this deal only)
+            pct_of_target = []
+            for a, t in zip(
+                pro_rata_numeric["Allocated_numeric"],
+                pro_rata_numeric["Target_numeric"],
+            ):
+                if t > 0:
+                    pct_of_target.append(fmt_percent(a / t * 100.0))
+                else:
+                    pct_of_target.append("")
+            pro_rata_df["% of Target Hold (This Deal)"] = pct_of_target
 
             st.dataframe(pro_rata_df, use_container_width=True)
 
@@ -393,5 +428,5 @@ else:
     st.info(
         "Edit the Deals and Vehicles tables above, then click **Calculate Allocations** "
         "to compute pro-rata allocations by facility and vehicle, plus each vehicle's "
-        "pro-rata share of the total deal."
+        "pro-rata and % of its Target Hold used for each deal."
     )
