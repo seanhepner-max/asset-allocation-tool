@@ -43,13 +43,6 @@ def editable_grid(df: pd.DataFrame, key: str, fit_columns: bool = True):
     return pd.DataFrame(grid_response["data"])
 
 
-def safe_float(x):
-    try:
-        return float(x)
-    except Exception:
-        return 0.0
-
-
 def safe_bool(x):
     # AgGrid may return True/False, 'true'/'false', 'True'/'False', or blanks
     if isinstance(x, bool):
@@ -64,7 +57,7 @@ def safe_bool(x):
 
 
 # =======================================
-# DEFAULT DATA (you can tweak these)
+# DEFAULT DATA
 # =======================================
 
 default_deals = pd.DataFrame(
@@ -197,7 +190,6 @@ st.markdown("---")
 # =======================================
 
 def clean_deals(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure numeric columns are numeric, others left as-is."""
     out = df.copy()
 
     num_cols = [
@@ -214,7 +206,6 @@ def clean_deals(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    # Strip strings in text columns
     text_cols = [
         "Deal",
         "Est. Closing Date",
@@ -239,14 +230,13 @@ def clean_vehicles(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    # Booleans
     for col in ["Revolver On", "DDTL On"]:
         if col in out.columns:
             out[col] = out[col].apply(safe_bool)
 
-    # Vehicle names as strings
     if "Vehicle" in out.columns:
         out["Vehicle"] = out["Vehicle"].astype(str).str.strip()
+
     return out
 
 
@@ -267,7 +257,6 @@ if st.button("Calculate Allocations"):
     vdf = clean_vehicles(vehicles_df_raw)
     vdf = compute_availability(vdf)
 
-    # Availability > 0
     positive_mask = vdf["Availability ($)"] > 0
     vdf_pos = vdf[positive_mask].copy()
     total_avail = vdf_pos["Availability ($)"].sum()
@@ -278,8 +267,9 @@ if st.button("Calculate Allocations"):
             "Please enter positive values for Cash, Unfunded, or Uncalled Capital."
         )
     else:
-        # Show availability summary (formatted with $ and commas)
+        # -------- Vehicle availability summary --------
         st.subheader("Vehicle Availability Summary")
+
         avail_display = vdf[
             [
                 "Vehicle",
@@ -291,6 +281,7 @@ if st.button("Calculate Allocations"):
                 "DDTL On",
             ]
         ]
+
         st.dataframe(
             avail_display.style.format(
                 {
@@ -303,14 +294,14 @@ if st.button("Calculate Allocations"):
             use_container_width=True,
         )
 
-        # --- Loop through deals and allocate per deal ---
+        # -------- Loop through deals --------
         for idx, row in deals_df.iterrows():
             deal_name = row.get("Deal", f"Deal {idx+1}") or f"Deal {idx+1}"
 
             st.markdown("---")
             st.subheader(f"Deal {idx+1}: {deal_name}")
 
-            # Build a one-row summary like your template
+            # Deal summary row
             summary = pd.DataFrame(
                 [
                     {
@@ -337,8 +328,8 @@ if st.button("Calculate Allocations"):
                 summary.style.format(
                     {
                         "EBITDA ($mm)": "{:,.2f}".format,
-                        "Senior Net Leverage (x)": "{:,.1f}".format,
-                        "Total Leverage (x)": "{:,.1f}".format,
+                        "Senior Net Leverage (x)": "{:,.2f}".format,
+                        "Total Leverage (x)": "{:,.2f}".format,
                         "Opening Spread (bps)": "{:,.0f}".format,
                         "IC Approved Hold ($)": "${:,.0f}".format,
                     }
@@ -346,23 +337,23 @@ if st.button("Calculate Allocations"):
                 use_container_width=True,
             )
 
-            # --- Get facility sizes for this deal ---
+            # Facility sizes (DEAL SIZE, not hold)
             tl_total = row.get("Term Loan ($)", 0.0)
             rev_total = row.get("Revolver ($)", 0.0)
             ddtl_total = row.get("DDTL ($)", 0.0)
             deal_total = tl_total + rev_total + ddtl_total
 
-            # Initialize allocation vectors
+            # Init allocation vectors
             alloc_term = pd.Series(0.0, index=vdf["Vehicle"])
             alloc_rev = pd.Series(0.0, index=vdf["Vehicle"])
             alloc_ddtl = pd.Series(0.0, index=vdf["Vehicle"])
 
-            # ---- Term Loan: all vehicles with Availability > 0 ----
+            # Term Loan: all positive-availability vehicles
             if tl_total > 0 and total_avail > 0:
                 base_shares = vdf_pos["Availability ($)"] / total_avail
                 alloc_term.loc[vdf_pos["Vehicle"]] = base_shares * tl_total
 
-            # ---- Revolver: Availability > 0 and Revolver On == True ----
+            # Revolver: positive availability + Revolver On
             if rev_total > 0:
                 rev_mask = (vdf["Availability ($)"] > 0) & (vdf["Revolver On"])
                 rev_den = vdf.loc[rev_mask, "Availability ($)"].sum()
@@ -372,7 +363,7 @@ if st.button("Calculate Allocations"):
                         rev_shares * rev_total
                     )
 
-            # ---- DDTL: Availability > 0 and DDTL On == True ----
+            # DDTL: positive availability + DDTL On
             if ddtl_total > 0:
                 ddtl_mask = (vdf["Availability ($)"] > 0) & (vdf["DDTL On"])
                 ddtl_den = vdf.loc[ddtl_mask, "Availability ($)"].sum()
@@ -382,25 +373,25 @@ if st.button("Calculate Allocations"):
                         ddtl_shares * ddtl_total
                     )
 
-            # ---- Build allocation table: facilities as rows, vehicles as columns ----
+            # Allocation table: facilities as rows, vehicles as columns
             alloc_df = pd.DataFrame({"Facility": ["Term Loan", "Revolver", "DDTL"]})
-
             for v in vdf["Vehicle"]:
                 alloc_df[v] = [
                     alloc_term.loc[v],
                     alloc_rev.loc[v],
                     alloc_ddtl.loc[v],
                 ]
-
             alloc_df = alloc_df.set_index("Facility")
 
             st.markdown("**Facility Allocations (Vehicles Across Columns)**")
             st.dataframe(
-                alloc_df.style.format("${:,.0f}".format),
+                alloc_df.style.format(
+                    {col: "${:,.0f}".format for col in alloc_df.columns}
+                ),
                 use_container_width=True,
             )
 
-            # ---- Pro-rata share of deal by vehicle ----
+            # Pro-rata share by vehicle (based on DEAL SIZE)
             st.markdown("**Pro-Rata Share of Deal by Vehicle**")
 
             vehicle_total_alloc = alloc_term + alloc_rev + alloc_ddtl
