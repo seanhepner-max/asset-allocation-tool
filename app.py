@@ -15,7 +15,8 @@ st.caption(
     "Only vehicles with positive availability receive allocations. "
     "Revolver and DDTL participation is controlled per vehicle. "
     "Target Hold is defined by fund and used to show % of target used per deal. "
-    "Allocations are pro-rata by availability off deal size (Term Loan + Revolver + DDTL)."
+    "Allocations are pro-rata by availability off each tranche size "
+    "(Term Loan, Revolver, DDTL)."
 )
 
 # =======================================
@@ -201,7 +202,12 @@ def clean_deals(df: pd.DataFrame) -> pd.DataFrame:
 def clean_vehicles(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    num_cols = ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)", "Target Hold ($)"]
+    num_cols = [
+        "Cash ($)",
+        "Unfunded Commitments ($)",
+        "Uncalled Capital ($)",
+        "Target Hold ($)",
+    ]
     for col in num_cols:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
@@ -251,10 +257,9 @@ if st.button("Calculate Allocations"):
     vdf = clean_vehicles(vehicles_df)
     vdf = compute_availability(vdf)
 
-    # Use vehicle names as the canonical index for allocations
     vehicles = vdf["Vehicle"].tolist()
 
-    # Positive-availability vehicles for TL
+    # Vehicles with positive availability (for TL)
     vdf_pos = vdf[vdf["Availability ($)"] > 0].copy()
     total_avail = vdf_pos["Availability ($)"].sum()
 
@@ -291,14 +296,12 @@ if st.button("Calculate Allocations"):
 
         st.dataframe(avail_display, use_container_width=True)
 
-        # index vdf by Vehicle for Target Hold lookup
         vdf_idx = vdf.set_index("Vehicle")
 
         # -------- Loop through deals --------
         for idx, row in deals.iterrows():
             deal_name = row.get("Deal", f"Deal {idx+1}") or f"Deal {idx+1}"
 
-            # Skip completely empty rows
             if (
                 (str(deal_name).strip() == "")
                 and row.get("Term Loan ($)", 0) == 0
@@ -325,7 +328,9 @@ if st.button("Calculate Allocations"):
                         "Covenant Lite": row.get("Covenant Lite", ""),
                         "Internal Rating": row.get("Internal Rating", ""),
                         "S&P Rating": row.get("S&P Rating", ""),
-                        "IC Approved Hold ($)": fmt_dollars(row.get("IC Approved Hold ($)", 0.0)),
+                        "IC Approved Hold ($)": fmt_dollars(
+                            row.get("IC Approved Hold ($)", 0.0)
+                        ),
                     }
                 ]
             )
@@ -333,7 +338,7 @@ if st.button("Calculate Allocations"):
             st.markdown("**Deal Summary**")
             st.dataframe(summary, use_container_width=True)
 
-            # -------- Facility sizes (DEAL SIZE) --------
+            # -------- Tranche sizes (DEAL SIZE) --------
             tl_total = float(row.get("Term Loan ($)", 0.0))
             rev_total = float(row.get("Revolver ($)", 0.0))
             ddtl_total = float(row.get("DDTL ($)", 0.0))
@@ -344,13 +349,18 @@ if st.button("Calculate Allocations"):
             alloc_rev = pd.Series(0.0, index=vehicles)
             alloc_ddtl = pd.Series(0.0, index=vehicles)
 
-            # ---- Term Loan: all vehicles with Availability > 0 (no toggles) ----
+            # ---- Term Loan: Availability > 0 (no toggles) ----
             if tl_total > 0 and total_avail > 0:
-                # shares indexed by vehicle name
                 tl_shares = (
                     vdf_pos.set_index("Vehicle")["Availability ($)"] / total_avail
                 )
-                alloc_term = tl_shares.reindex(vehicles).fillna(0.0) * tl_total
+                tl_alloc_raw = tl_shares.reindex(vehicles).fillna(0.0) * tl_total
+                # Renormalize to ensure sum == tl_total
+                tl_sum = float(tl_alloc_raw.sum())
+                if tl_sum > 0:
+                    alloc_term = tl_alloc_raw * (tl_total / tl_sum)
+                else:
+                    alloc_term = tl_alloc_raw
 
             # ---- Revolver: Availability > 0 AND Revolver On ----
             if rev_total > 0:
@@ -361,7 +371,12 @@ if st.button("Calculate Allocations"):
                     rev_shares = (
                         rev_elig.set_index("Vehicle")["Availability ($)"] / rev_den
                     )
-                    alloc_rev = rev_shares.reindex(vehicles).fillna(0.0) * rev_total
+                    rev_alloc_raw = rev_shares.reindex(vehicles).fillna(0.0) * rev_total
+                    rev_sum = float(rev_alloc_raw.sum())
+                    if rev_sum > 0:
+                        alloc_rev = rev_alloc_raw * (rev_total / rev_sum)
+                    else:
+                        alloc_rev = rev_alloc_raw
 
             # ---- DDTL: Availability > 0 AND DDTL On ----
             if ddtl_total > 0:
@@ -372,7 +387,14 @@ if st.button("Calculate Allocations"):
                     ddtl_shares = (
                         ddtl_elig.set_index("Vehicle")["Availability ($)"] / ddtl_den
                     )
-                    alloc_ddtl = ddtl_shares.reindex(vehicles).fillna(0.0) * ddtl_total
+                    ddtl_alloc_raw = (
+                        ddtl_shares.reindex(vehicles).fillna(0.0) * ddtl_total
+                    )
+                    ddtl_sum = float(ddtl_alloc_raw.sum())
+                    if ddtl_sum > 0:
+                        alloc_ddtl = ddtl_alloc_raw * (ddtl_total / ddtl_sum)
+                    else:
+                        alloc_ddtl = ddtl_alloc_raw
 
             # -------- Allocation table: facilities x vehicles --------
             alloc_numeric = pd.DataFrame(
@@ -384,6 +406,10 @@ if st.button("Calculate Allocations"):
                     float(alloc_rev.get(veh, 0.0) or 0.0),
                     float(alloc_ddtl.get(veh, 0.0) or 0.0),
                 ]
+
+            # For sanity: sums per row match tranche sizes
+            # (not shown, but you can verify if needed)
+            # tl_check = alloc_numeric.loc[alloc_numeric["Facility"] == "Term Loan", vehicles].values.sum()
 
             alloc_fmt = alloc_numeric.copy()
             for veh in vehicles:
