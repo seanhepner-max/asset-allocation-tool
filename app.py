@@ -219,7 +219,7 @@ def clean_vehicles(df: pd.DataFrame) -> pd.DataFrame:
 def compute_availability(vdf: pd.DataFrame) -> pd.DataFrame:
     df = vdf.copy()
     df["Availability ($)"] = (
-        df["Cash ($)"] + df["Unfunded Commitments ($)" ]+ df["Uncalled Capital ($)"]
+        df["Cash ($)"] + df["Unfunded Commitments ($)"] + df["Uncalled Capital ($)"]
     )
     return df
 
@@ -251,8 +251,11 @@ if st.button("Calculate Allocations"):
     vdf = clean_vehicles(vehicles_df)
     vdf = compute_availability(vdf)
 
-    positive_mask = vdf["Availability ($)"] > 0
-    vdf_pos = vdf[positive_mask].copy()
+    # Use vehicle names as the canonical index for allocations
+    vehicles = vdf["Vehicle"].tolist()
+
+    # Positive-availability vehicles for TL
+    vdf_pos = vdf[vdf["Availability ($)"] > 0].copy()
     total_avail = vdf_pos["Availability ($)"].sum()
 
     if total_avail <= 0:
@@ -277,12 +280,18 @@ if st.button("Calculate Allocations"):
             ]
         ].copy()
 
-        for col in ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)", "Availability ($)", "Target Hold ($)"]:
+        for col in [
+            "Cash ($)",
+            "Unfunded Commitments ($)",
+            "Uncalled Capital ($)",
+            "Availability ($)",
+            "Target Hold ($)",
+        ]:
             avail_display[col] = avail_display[col].apply(fmt_dollars)
 
         st.dataframe(avail_display, use_container_width=True)
 
-        # index vdf by Vehicle for easy target lookup
+        # index vdf by Vehicle for Target Hold lookup
         vdf_idx = vdf.set_index("Vehicle")
 
         # -------- Loop through deals --------
@@ -330,72 +339,80 @@ if st.button("Calculate Allocations"):
             ddtl_total = float(row.get("DDTL ($)", 0.0))
             deal_total = tl_total + rev_total + ddtl_total
 
-            # Init allocation vectors (numeric)
-            alloc_term = pd.Series(0.0, index=vdf["Vehicle"])
-            alloc_rev = pd.Series(0.0, index=vdf["Vehicle"])
-            alloc_ddtl = pd.Series(0.0, index=vdf["Vehicle"])
+            # ===== Allocation vectors, indexed by vehicle name =====
+            alloc_term = pd.Series(0.0, index=vehicles)
+            alloc_rev = pd.Series(0.0, index=vehicles)
+            alloc_ddtl = pd.Series(0.0, index=vehicles)
 
-            # Term Loan: all positive-availability vehicles
+            # ---- Term Loan: all vehicles with Availability > 0 (no toggles) ----
             if tl_total > 0 and total_avail > 0:
-                base_shares = vdf_pos["Availability ($)"] / total_avail
-                for veh, share in base_shares.items():
-                    alloc_term.loc[veh] = float(share) * tl_total
+                # shares indexed by vehicle name
+                tl_shares = (
+                    vdf_pos.set_index("Vehicle")["Availability ($)"] / total_avail
+                )
+                alloc_term = tl_shares.reindex(vehicles).fillna(0.0) * tl_total
 
-            # Revolver: positive availability + Revolver On
+            # ---- Revolver: Availability > 0 AND Revolver On ----
             if rev_total > 0:
                 rev_mask = (vdf["Availability ($)"] > 0) & (vdf["Revolver On"])
-                rev_den = vdf.loc[rev_mask, "Availability ($)"].sum()
+                rev_elig = vdf[rev_mask].copy()
+                rev_den = rev_elig["Availability ($)"].sum()
                 if rev_den > 0:
-                    rev_shares = vdf.loc[rev_mask, "Availability ($)"] / rev_den
-                    for veh, share in rev_shares.items():
-                        alloc_rev.loc[veh] = float(share) * rev_total
+                    rev_shares = (
+                        rev_elig.set_index("Vehicle")["Availability ($)"] / rev_den
+                    )
+                    alloc_rev = rev_shares.reindex(vehicles).fillna(0.0) * rev_total
 
-            # DDTL: positive availability + DDTL On
+            # ---- DDTL: Availability > 0 AND DDTL On ----
             if ddtl_total > 0:
                 ddtl_mask = (vdf["Availability ($)"] > 0) & (vdf["DDTL On"])
-                ddtl_den = vdf.loc[ddtl_mask, "Availability ($)"].sum()
+                ddtl_elig = vdf[ddtl_mask].copy()
+                ddtl_den = ddtl_elig["Availability ($)"].sum()
                 if ddtl_den > 0:
-                    ddtl_shares = vdf.loc[ddtl_mask, "Availability ($)"] / ddtl_den
-                    for veh, share in ddtl_shares.items():
-                        alloc_ddtl.loc[veh] = float(share) * ddtl_total
+                    ddtl_shares = (
+                        ddtl_elig.set_index("Vehicle")["Availability ($)"] / ddtl_den
+                    )
+                    alloc_ddtl = ddtl_shares.reindex(vehicles).fillna(0.0) * ddtl_total
 
             # -------- Allocation table: facilities x vehicles --------
-            alloc_numeric = pd.DataFrame({"Facility": ["Term Loan", "Revolver", "DDTL"]})
-            for veh in vdf["Vehicle"]:
-                tl_val = float(alloc_term.get(veh, 0.0) or 0.0)
-                rev_val = float(alloc_rev.get(veh, 0.0) or 0.0)
-                ddtl_val = float(alloc_ddtl.get(veh, 0.0) or 0.0)
-                alloc_numeric[veh] = [tl_val, rev_val, ddtl_val]
+            alloc_numeric = pd.DataFrame(
+                {"Facility": ["Term Loan", "Revolver", "DDTL"]}
+            )
+            for veh in vehicles:
+                alloc_numeric[veh] = [
+                    float(alloc_term.get(veh, 0.0) or 0.0),
+                    float(alloc_rev.get(veh, 0.0) or 0.0),
+                    float(alloc_ddtl.get(veh, 0.0) or 0.0),
+                ]
 
-            # Format to $ strings for display
             alloc_fmt = alloc_numeric.copy()
-            for veh in vdf["Vehicle"]:
+            for veh in vehicles:
                 alloc_fmt[veh] = alloc_fmt[veh].apply(fmt_dollars)
 
             st.markdown("**Facility Allocations (Vehicles Across Columns)**")
             st.dataframe(alloc_fmt.set_index("Facility"), use_container_width=True)
 
-            # -------- Pro-rata share by vehicle (based on DEAL SIZE & Target Hold) --------
+            # -------- Pro-rata share by vehicle (DEAL SIZE & Target Hold) --------
             st.markdown("**Pro-Rata Share of Deal by Vehicle (with Target Hold)**")
 
             vehicle_total_alloc = alloc_term + alloc_rev + alloc_ddtl
 
-            # Build numeric helper frame
             pro_rata_numeric = pd.DataFrame(
                 {
-                    "Vehicle": vdf["Vehicle"],
+                    "Vehicle": vehicles,
                     "Allocated_numeric": [
                         float(vehicle_total_alloc.get(veh, 0.0) or 0.0)
-                        for veh in vdf["Vehicle"]
+                        for veh in vehicles
                     ],
                     "Target_numeric": [
-                        float(vdf_idx.loc[veh, "Target Hold ($)"]) if veh in vdf_idx.index else 0.0
-                        for veh in vdf["Vehicle"]
+                        float(vdf_idx.loc[veh, "Target Hold ($)"])
+                        if veh in vdf_idx.index
+                        else 0.0
+                        for veh in vehicles
                     ],
                 }
             )
 
-            # Build display table
             pro_rata_df = pd.DataFrame()
             pro_rata_df["Vehicle"] = pro_rata_numeric["Vehicle"]
             pro_rata_df["Allocated ($)"] = pro_rata_numeric["Allocated_numeric"].apply(
@@ -405,7 +422,6 @@ if st.button("Calculate Allocations"):
                 fmt_dollars
             )
 
-            # % of Deal
             if deal_total > 0:
                 pro_rata_df["Pro-Rata Share of Deal (%)"] = [
                     fmt_percent(a / deal_total * 100.0)
@@ -414,16 +430,12 @@ if st.button("Calculate Allocations"):
             else:
                 pro_rata_df["Pro-Rata Share of Deal (%)"] = ""
 
-            # % of Target Hold used (for this deal only)
             pct_of_target = []
             for a, t in zip(
                 pro_rata_numeric["Allocated_numeric"],
                 pro_rata_numeric["Target_numeric"],
             ):
-                try:
-                    t_val = float(t)
-                except Exception:
-                    t_val = 0.0
+                t_val = float(t) if t is not None else 0.0
                 if t_val > 0:
                     pct_of_target.append(fmt_percent(a / t_val * 100.0))
                 else:
