@@ -1,60 +1,20 @@
 import streamlit as st
 import pandas as pd
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 st.set_page_config(
-    page_title="Multi-Deal Availability Allocation Tool (Grid)",
+    page_title="Multi-Deal Availability Allocation Tool",
     layout="wide",
 )
 
-st.title("Multi-Deal Availability-Based Allocation Tool (Grid Version)")
+st.title("Multi-Deal Availability-Based Allocation Tool")
 
 st.caption(
-    "Edit deals and vehicle availability directly in the tables. "
+    "Edit deals and vehicle availability in the tables below. "
     "Availability = Cash + Unfunded Commitments + Uncalled Capital. "
     "Only vehicles with positive availability receive allocations. "
     "Revolver and DDTL participation is controlled per vehicle. "
     "Pro-rata share of each deal by fund is computed from these allocations."
 )
-
-# =======================================
-# Helper: build editable AgGrid
-# =======================================
-
-def editable_grid(df: pd.DataFrame, key: str, fit_columns: bool = True):
-    gb = GridOptionsBuilder.from_dataframe(df)
-    gb.configure_default_column(editable=True, resizable=True)
-
-    if fit_columns:
-        gb.configure_grid_options(domLayout="normal")
-
-    grid_options = gb.build()
-
-    grid_response = AgGrid(
-        df,
-        gridOptions=grid_options,
-        update_mode=GridUpdateMode.VALUE_CHANGED,
-        data_return_mode="AS_INPUT",
-        fit_columns_on_grid_load=True,
-        enable_enterprise_modules=False,
-        key=key,
-    )
-
-    return pd.DataFrame(grid_response["data"])
-
-
-def safe_bool(x):
-    # AgGrid may return True/False, 'true'/'false', 'True'/'False', or blanks
-    if isinstance(x, bool):
-        return x
-    if isinstance(x, str):
-        x_clean = x.strip().lower()
-        if x_clean in ["true", "yes", "y", "1"]:
-            return True
-        if x_clean in ["false", "no", "n", "0", ""]:
-            return False
-    return False
-
 
 # =======================================
 # DEFAULT DATA
@@ -129,64 +89,72 @@ default_vehicles = pd.DataFrame(
 )
 
 # =======================================
-# LAYOUT: Deals grid (left) + Vehicles (right)
+# LAYOUT: Deals table (left) + Vehicles (right)
 # =======================================
 
 left_col, right_col = st.columns([2.5, 1.5])
 
 with left_col:
-    st.subheader("Deals (edit directly in grid)")
-    st.markdown(
-        "First column is **Deal**, followed by all metrics and facility sizes "
-        "(Term Loan / Revolver / DDTL)."
+    st.subheader("Deals")
+
+    deals_df = st.data_editor(
+        default_deals,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "EBITDA ($mm)": st.column_config.NumberColumn(
+                "EBITDA ($mm)", format="%.2f"
+            ),
+            "Senior Net Leverage (x)": st.column_config.NumberColumn(
+                "Senior Net Leverage (x)", format="%.2f"
+            ),
+            "Total Leverage (x)": st.column_config.NumberColumn(
+                "Total Leverage (x)", format="%.2f"
+            ),
+            "Opening Spread (bps)": st.column_config.NumberColumn(
+                "Opening Spread (bps)", format="%d"
+            ),
+            "IC Approved Hold ($)": st.column_config.NumberColumn(
+                "IC Approved Hold ($)", format="$%,.0f"
+            ),
+            "Term Loan ($)": st.column_config.NumberColumn(
+                "Term Loan ($)", format="$%,.0f"
+            ),
+            "Revolver ($)": st.column_config.NumberColumn(
+                "Revolver ($)", format="$%,.0f"
+            ),
+            "DDTL ($)": st.column_config.NumberColumn(
+                "DDTL ($)", format="$%,.0f"
+            ),
+        },
     )
-
-    num_rows = st.number_input(
-        "Number of deal rows",
-        min_value=1,
-        max_value=50,
-        value=default_deals.shape[0],
-        step=1,
-    )
-
-    # Adjust default_deals rows if the user changes num_rows
-    if num_rows > default_deals.shape[0]:
-        for _ in range(num_rows - default_deals.shape[0]):
-            default_deals = pd.concat(
-                [
-                    default_deals,
-                    pd.DataFrame(
-                        [
-                            {
-                                col: ""
-                                if default_deals[col].dtype == "O"
-                                else 0
-                                for col in default_deals.columns
-                            }
-                        ]
-                    ),
-                ],
-                ignore_index=True,
-            )
-    elif num_rows < default_deals.shape[0]:
-        default_deals = default_deals.head(num_rows).copy()
-
-    deals_df_raw = editable_grid(default_deals, key="deals_grid")
 
 with right_col:
-    st.subheader("Vehicles / Funds (Availability & Toggles)")
-    st.markdown(
-        "Enter **Cash, Unfunded Commitments, Uncalled Capital** and whether "
-        "each vehicle participates in **Revolver** and **DDTL**. "
-        "Availability is computed automatically in the allocation step."
-    )
+    st.subheader("Vehicles / Funds")
 
-    vehicles_df_raw = editable_grid(default_vehicles, key="vehicles_grid")
+    vehicles_df = st.data_editor(
+        default_vehicles,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Cash ($)": st.column_config.NumberColumn(
+                "Cash ($)", format="$%,.0f"
+            ),
+            "Unfunded Commitments ($)": st.column_config.NumberColumn(
+                "Unfunded Commitments ($)", format="$%,.0f"
+            ),
+            "Uncalled Capital ($)": st.column_config.NumberColumn(
+                "Uncalled Capital ($)", format="$%,.0f"
+            ),
+            "Revolver On": st.column_config.CheckboxColumn("Revolver On"),
+            "DDTL On": st.column_config.CheckboxColumn("DDTL On"),
+        },
+    )
 
 st.markdown("---")
 
 # =======================================
-# Cleaning / typing helpers
+# Cleaning / helpers
 # =======================================
 
 def clean_deals(df: pd.DataFrame) -> pd.DataFrame:
@@ -230,9 +198,10 @@ def clean_vehicles(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
+    # Ensure booleans
     for col in ["Revolver On", "DDTL On"]:
         if col in out.columns:
-            out[col] = out[col].apply(safe_bool)
+            out[col] = out[col].fillna(False).astype(bool)
 
     if "Vehicle" in out.columns:
         out["Vehicle"] = out["Vehicle"].astype(str).str.strip()
@@ -253,8 +222,8 @@ def compute_availability(vdf: pd.DataFrame) -> pd.DataFrame:
 # =======================================
 
 if st.button("Calculate Allocations"):
-    deals_df = clean_deals(deals_df_raw)
-    vdf = clean_vehicles(vehicles_df_raw)
+    deals = clean_deals(deals_df)
+    vdf = clean_vehicles(vehicles_df)
     vdf = compute_availability(vdf)
 
     positive_mask = vdf["Availability ($)"] > 0
@@ -295,8 +264,17 @@ if st.button("Calculate Allocations"):
         )
 
         # -------- Loop through deals --------
-        for idx, row in deals_df.iterrows():
+        for idx, row in deals.iterrows():
             deal_name = row.get("Deal", f"Deal {idx+1}") or f"Deal {idx+1}"
+
+            # Skip completely empty rows
+            if (
+                (str(deal_name).strip() == "")
+                and row.get("Term Loan ($)", 0) == 0
+                and row.get("Revolver ($)", 0) == 0
+                and row.get("DDTL ($)", 0) == 0
+            ):
+                continue
 
             st.markdown("---")
             st.subheader(f"Deal {idx+1}: {deal_name}")
@@ -323,7 +301,7 @@ if st.button("Calculate Allocations"):
                 ]
             )
 
-            st.markdown("**Deal Summary (row-style, matching template order)**")
+            st.markdown("**Deal Summary**")
             st.dataframe(
                 summary.style.format(
                     {
@@ -421,8 +399,7 @@ if st.button("Calculate Allocations"):
 
 else:
     st.info(
-        "Edit the Deals and Vehicles grids above, then click **Calculate Allocations** "
+        "Edit the Deals and Vehicles tables above, then click **Calculate Allocations** "
         "to compute pro-rata allocations by facility and vehicle, plus each vehicle's "
         "pro-rata share of the total deal."
     )
-
