@@ -147,6 +147,7 @@ with left_col:
 with right_col:
     st.subheader("Vehicles / Funds")
 
+    # 👉 Simplified editor: plain numeric inputs, no $ formatting here
     vehicles_df = st.data_editor(
         default_vehicles,
         key="vehicles_editor",
@@ -156,17 +157,15 @@ with right_col:
         disabled=False,
         column_config={
             "Vehicle": st.column_config.TextColumn("Vehicle"),
-            "Cash ($)": st.column_config.NumberColumn(
-                "Cash ($)", format="$%,.0f"
-            ),
+            "Cash ($)": st.column_config.NumberColumn("Cash ($)", format="%.0f"),
             "Unfunded Commitments ($)": st.column_config.NumberColumn(
-                "Unfunded Commitments ($)", format="$%,.0f"
+                "Unfunded Commitments ($)", format="%.0f"
             ),
             "Uncalled Capital ($)": st.column_config.NumberColumn(
-                "Uncalled Capital ($)", format="$%,.0f"
+                "Uncalled Capital ($)", format="%.0f"
             ),
             "Target Hold ($)": st.column_config.NumberColumn(
-                "Target Hold ($)", format="$%,.0f"
+                "Target Hold ($)", format="%.0f"
             ),
             "Revolver On": st.column_config.CheckboxColumn("Revolver On"),
             "DDTL On": st.column_config.CheckboxColumn("DDTL On"),
