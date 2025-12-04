@@ -115,16 +115,16 @@ with left_col:
                 "Opening Spread (bps)", format="%d"
             ),
             "IC Approved Hold ($)": st.column_config.NumberColumn(
-                "IC Approved Hold ($)", format="$%,.0f"
+                "IC Approved Hold ($)", format="%.0f"
             ),
             "Term Loan ($)": st.column_config.NumberColumn(
-                "Term Loan ($)", format="$%,.0f"
+                "Term Loan ($)", format="%.0f"
             ),
             "Revolver ($)": st.column_config.NumberColumn(
-                "Revolver ($)", format="$%,.0f"
+                "Revolver ($)", format="%.0f"
             ),
             "DDTL ($)": st.column_config.NumberColumn(
-                "DDTL ($)", format="$%,.0f"
+                "DDTL ($)", format="%.0f"
             ),
         },
     )
@@ -138,13 +138,13 @@ with right_col:
         use_container_width=True,
         column_config={
             "Cash ($)": st.column_config.NumberColumn(
-                "Cash ($)", format="$%,.0f"
+                "Cash ($)", format="%.0f"
             ),
             "Unfunded Commitments ($)": st.column_config.NumberColumn(
-                "Unfunded Commitments ($)", format="$%,.0f"
+                "Unfunded Commitments ($)", format="%.0f"
             ),
             "Uncalled Capital ($)": st.column_config.NumberColumn(
-                "Uncalled Capital ($)", format="$%,.0f"
+                "Uncalled Capital ($)", format="%.0f"
             ),
             "Revolver On": st.column_config.CheckboxColumn("Revolver On"),
             "DDTL On": st.column_config.CheckboxColumn("DDTL On"),
@@ -198,7 +198,6 @@ def clean_vehicles(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    # Ensure booleans
     for col in ["Revolver On", "DDTL On"]:
         if col in out.columns:
             out[col] = out[col].fillna(False).astype(bool)
@@ -215,6 +214,20 @@ def compute_availability(vdf: pd.DataFrame) -> pd.DataFrame:
         df["Cash ($)"] + df["Unfunded Commitments ($)"] + df["Uncalled Capital ($)"]
     )
     return df
+
+
+def fmt_dollars(x: float) -> str:
+    try:
+        return f"${x:,.0f}"
+    except Exception:
+        return ""
+
+
+def fmt_percent(x: float) -> str:
+    try:
+        return f"{x:,.2f}%"
+    except Exception:
+        return ""
 
 
 # =======================================
@@ -249,19 +262,12 @@ if st.button("Calculate Allocations"):
                 "Revolver On",
                 "DDTL On",
             ]
-        ]
+        ].copy()
 
-        st.dataframe(
-            avail_display.style.format(
-                {
-                    "Cash ($)": "${:,.0f}".format,
-                    "Unfunded Commitments ($)": "${:,.0f}".format,
-                    "Uncalled Capital ($)": "${:,.0f}".format,
-                    "Availability ($)": "${:,.0f}".format,
-                }
-            ),
-            use_container_width=True,
-        )
+        for col in ["Cash ($)", "Unfunded Commitments ($)", "Uncalled Capital ($)", "Availability ($)"]:
+            avail_display[col] = avail_display[col].apply(fmt_dollars)
+
+        st.dataframe(avail_display, use_container_width=True)
 
         # -------- Loop through deals --------
         for idx, row in deals.iterrows():
@@ -279,7 +285,7 @@ if st.button("Calculate Allocations"):
             st.markdown("---")
             st.subheader(f"Deal {idx+1}: {deal_name}")
 
-            # Deal summary row
+            # Deal summary
             summary = pd.DataFrame(
                 [
                     {
@@ -287,35 +293,22 @@ if st.button("Calculate Allocations"):
                         "Est. Closing Date": row.get("Est. Closing Date", ""),
                         "New Deal or Amendment": row.get("New Deal or Amendment", ""),
                         "Transaction Type": row.get("Transaction Type", ""),
-                        "EBITDA ($mm)": row.get("EBITDA ($mm)", 0.0),
-                        "Senior Net Leverage (x)": row.get(
-                            "Senior Net Leverage (x)", 0.0
-                        ),
-                        "Total Leverage (x)": row.get("Total Leverage (x)", 0.0),
-                        "Opening Spread (bps)": row.get("Opening Spread (bps)", 0.0),
+                        "EBITDA ($mm)": f"{row.get('EBITDA ($mm)', 0.0):,.2f}",
+                        "Senior Net Leverage (x)": f"{row.get('Senior Net Leverage (x)', 0.0):,.2f}",
+                        "Total Leverage (x)": f"{row.get('Total Leverage (x)', 0.0):,.2f}",
+                        "Opening Spread (bps)": f"{row.get('Opening Spread (bps)', 0.0):,.0f}",
                         "Covenant Lite": row.get("Covenant Lite", ""),
                         "Internal Rating": row.get("Internal Rating", ""),
                         "S&P Rating": row.get("S&P Rating", ""),
-                        "IC Approved Hold ($)": row.get("IC Approved Hold ($)", 0.0),
+                        "IC Approved Hold ($)": fmt_dollars(row.get("IC Approved Hold ($)", 0.0)),
                     }
                 ]
             )
 
             st.markdown("**Deal Summary**")
-            st.dataframe(
-                summary.style.format(
-                    {
-                        "EBITDA ($mm)": "{:,.2f}".format,
-                        "Senior Net Leverage (x)": "{:,.2f}".format,
-                        "Total Leverage (x)": "{:,.2f}".format,
-                        "Opening Spread (bps)": "{:,.0f}".format,
-                        "IC Approved Hold ($)": "${:,.0f}".format,
-                    }
-                ),
-                use_container_width=True,
-            )
+            st.dataframe(summary, use_container_width=True)
 
-            # Facility sizes (DEAL SIZE, not hold)
+            # Facility sizes (DEAL SIZE)
             tl_total = row.get("Term Loan ($)", 0.0)
             rev_total = row.get("Revolver ($)", 0.0)
             ddtl_total = row.get("DDTL ($)", 0.0)
@@ -359,15 +352,13 @@ if st.button("Calculate Allocations"):
                     alloc_rev.loc[v],
                     alloc_ddtl.loc[v],
                 ]
-            alloc_df = alloc_df.set_index("Facility")
+            # Format to $ strings
+            alloc_fmt = alloc_df.copy()
+            for v in vdf["Vehicle"]:
+                alloc_fmt[v] = alloc_fmt[v].apply(fmt_dollars)
 
             st.markdown("**Facility Allocations (Vehicles Across Columns)**")
-            st.dataframe(
-                alloc_df.style.format(
-                    {col: "${:,.0f}".format for col in alloc_df.columns}
-                ),
-                use_container_width=True,
-            )
+            st.dataframe(alloc_fmt.set_index("Facility"), use_container_width=True)
 
             # Pro-rata share by vehicle (based on DEAL SIZE)
             st.markdown("**Pro-Rata Share of Deal by Vehicle**")
@@ -380,22 +371,16 @@ if st.button("Calculate Allocations"):
                 }
             )
 
+            pro_rata_df["Allocated ($)"] = pro_rata_df["Allocated ($)"].apply(fmt_dollars)
+
             if deal_total > 0:
                 pro_rata_df["Pro-Rata Share (%)"] = (
-                    pro_rata_df["Allocated ($)"] / deal_total * 100.0
-                )
+                    (vehicle_total_alloc / deal_total) * 100
+                ).apply(fmt_percent)
             else:
-                pro_rata_df["Pro-Rata Share (%)"] = 0.0
+                pro_rata_df["Pro-Rata Share (%)"] = ""
 
-            st.dataframe(
-                pro_rata_df.style.format(
-                    {
-                        "Allocated ($)": "${:,.0f}".format,
-                        "Pro-Rata Share (%)": "{:,.2f}%".format,
-                    }
-                ),
-                use_container_width=True,
-            )
+            st.dataframe(pro_rata_df, use_container_width=True)
 
 else:
     st.info(
