@@ -105,9 +105,15 @@ with left_col:
 
     deals_df = st.data_editor(
         default_deals,
+        key="deals_editor",
         num_rows="dynamic",
         use_container_width=True,
+        hide_index=True,
         column_config={
+            "Deal": st.column_config.TextColumn("Deal"),
+            "Est. Closing Date": st.column_config.TextColumn("Est. Closing Date"),
+            "New Deal or Amendment": st.column_config.TextColumn("New Deal or Amendment"),
+            "Transaction Type": st.column_config.TextColumn("Transaction Type"),
             "EBITDA ($mm)": st.column_config.NumberColumn(
                 "EBITDA ($mm)", format="%.2f"
             ),
@@ -120,6 +126,9 @@ with left_col:
             "Opening Spread (bps)": st.column_config.NumberColumn(
                 "Opening Spread (bps)", format="%d"
             ),
+            "Covenant Lite": st.column_config.TextColumn("Covenant Lite"),
+            "Internal Rating": st.column_config.TextColumn("Internal Rating"),
+            "S&P Rating": st.column_config.TextColumn("S&P Rating"),
             "IC Approved Hold ($)": st.column_config.NumberColumn(
                 "IC Approved Hold ($)", format="%.0f"
             ),
@@ -140,9 +149,13 @@ with right_col:
 
     vehicles_df = st.data_editor(
         default_vehicles,
+        key="vehicles_editor",
         num_rows="dynamic",
         use_container_width=True,
+        hide_index=True,
+        disabled=False,
         column_config={
+            "Vehicle": st.column_config.TextColumn("Vehicle"),
             "Cash ($)": st.column_config.NumberColumn(
                 "Cash ($)", format="$%,.0f"
             ),
@@ -259,7 +272,7 @@ if st.button("Calculate Allocations"):
 
     vehicles = vdf["Vehicle"].tolist()
 
-    # Vehicles with positive availability (for TL baseline)
+    # Vehicles with positive availability (for baseline checks)
     vdf_pos = vdf[vdf["Availability ($)"] > 0].copy()
 
     if vdf_pos.empty:
@@ -301,7 +314,7 @@ if st.button("Calculate Allocations"):
         for idx, row in deals.iterrows():
             deal_name = row.get("Deal", f"Deal {idx+1}") or f"Deal {idx+1}"
 
-            # Skip empty rows
+            # Skip empty rows (no tranche sizes)
             if (
                 (str(deal_name).strip() == "")
                 and row.get("Term Loan ($)", 0) == 0
@@ -355,9 +368,8 @@ if st.button("Calculate Allocations"):
                 weights = tl_elig.set_index("Vehicle")["Availability ($)"]
                 den = float(weights.sum())
                 if den > 0:
-                    shares = weights / den          # sum(shares) = 1
+                    shares = weights / den  # sum(shares) = 1
                     alloc_term = shares.reindex(vehicles).fillna(0.0) * tl_total
-                    # sum(alloc_term) = tl_total (up to tiny float noise)
 
             # ---- Revolver: Availability > 0 AND Revolver On ----
             if rev_total > 0:
