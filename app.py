@@ -434,3 +434,4 @@ else:
         "to compute pro-rata allocations by facility and vehicle, plus each vehicle's "
         "pro-rata share of the total deal."
     )
+
