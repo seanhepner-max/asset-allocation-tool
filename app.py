@@ -12,11 +12,12 @@ st.title("Multi-Deal Availability-Based Allocation Tool")
 st.caption(
     "Edit deals and vehicle availability in the tables below. "
     "Availability = Cash + Unfunded Commitments + Uncalled Capital. "
-    "Only vehicles with positive availability receive allocations. "
+    "Only vehicles with positive availability and passing any thresholds receive allocations. "
     "Revolver and DDTL participation is controlled per vehicle. "
     "Target Hold is defined by fund and used to show % of target used per deal. "
     "Allocations are pro-rata by availability off each tranche size "
-    "(Term Loan, Revolver, DDTL)."
+    "(Term Loan, Revolver, DDTL). "
+    "Vehicles can also be filtered by Min EBITDA and Min Spread thresholds."
 )
 
 # =======================================
@@ -70,6 +71,8 @@ default_vehicles = pd.DataFrame(
             "Unfunded Commitments ($)": 5_000_000,
             "Uncalled Capital ($)": 10_000_000,
             "Target Hold ($)": 40_000_000,
+            "Min EBITDA ($mm)": 0.0,
+            "Min Spread (bps)": 0.0,
             "Revolver On": True,
             "DDTL On": True,
         },
@@ -79,6 +82,8 @@ default_vehicles = pd.DataFrame(
             "Unfunded Commitments ($)": 5_000_000,
             "Uncalled Capital ($)": 10_000_000,
             "Target Hold ($)": 30_000_000,
+            "Min EBITDA ($mm)": 60.0,
+            "Min Spread (bps)": 400.0,
             "Revolver On": True,
             "DDTL On": False,
         },
@@ -88,6 +93,8 @@ default_vehicles = pd.DataFrame(
             "Unfunded Commitments ($)": 5_000_000,
             "Uncalled Capital ($)": 10_000_000,
             "Target Hold ($)": 20_000_000,
+            "Min EBITDA ($mm)": 0.0,
+            "Min Spread (bps)": 425.0,
             "Revolver On": False,
             "DDTL On": True,
         },
@@ -166,6 +173,12 @@ with right_col:
             "Target Hold ($)": st.column_config.NumberColumn(
                 "Target Hold ($)", format="%.0f"
             ),
+            "Min EBITDA ($mm)": st.column_config.NumberColumn(
+                "Min EBITDA ($mm)", format="%.2f"
+            ),
+            "Min Spread (bps)": st.column_config.NumberColumn(
+                "Min Spread (bps)", format="%.0f"
+            ),
             "Revolver On": st.column_config.CheckboxColumn("Revolver On"),
             "DDTL On": st.column_config.CheckboxColumn("DDTL On"),
         },
@@ -218,6 +231,8 @@ def clean_vehicles(df: pd.DataFrame) -> pd.DataFrame:
         "Unfunded Commitments ($)",
         "Uncalled Capital ($)",
         "Target Hold ($)",
+        "Min EBITDA ($mm)",
+        "Min Spread (bps)",
     ]
     for col in num_cols:
         if col in out.columns:
@@ -290,6 +305,8 @@ if st.button("Calculate Allocations"):
                 "Uncalled Capital ($)",
                 "Availability ($)",
                 "Target Hold ($)",
+                "Min EBITDA ($mm)",
+                "Min Spread (bps)",
                 "Revolver On",
                 "DDTL On",
             ]
@@ -325,6 +342,9 @@ if st.button("Calculate Allocations"):
             st.subheader(f"Deal {idx+1}: {deal_name}")
 
             # -------- Deal summary --------
+            deal_ebitda = float(row.get("EBITDA ($mm)", 0.0) or 0.0)
+            deal_spread = float(row.get("Opening Spread (bps)", 0.0) or 0.0)
+
             summary = pd.DataFrame(
                 [
                     {
@@ -332,10 +352,10 @@ if st.button("Calculate Allocations"):
                         "Est. Closing Date": row.get("Est. Closing Date", ""),
                         "New Deal or Amendment": row.get("New Deal or Amendment", ""),
                         "Transaction Type": row.get("Transaction Type", ""),
-                        "EBITDA ($mm)": f"{row.get('EBITDA ($mm)', 0.0):,.2f}",
+                        "EBITDA ($mm)": f"{deal_ebitda:,.2f}",
                         "Senior Net Leverage (x)": f"{row.get('Senior Net Leverage (x)', 0.0):,.2f}",
                         "Total Leverage (x)": f"{row.get('Total Leverage (x)', 0.0):,.2f}",
-                        "Opening Spread (bps)": f"{row.get('Opening Spread (bps)', 0.0):,.0f}",
+                        "Opening Spread (bps)": f"{deal_spread:,.0f}",
                         "Covenant Lite": row.get("Covenant Lite", ""),
                         "Internal Rating": row.get("Internal Rating", ""),
                         "S&P Rating": row.get("S&P Rating", ""),
@@ -360,31 +380,46 @@ if st.button("Calculate Allocations"):
             alloc_rev = pd.Series(0.0, index=vehicles)
             alloc_ddtl = pd.Series(0.0, index=vehicles)
 
-            # ---- Term Loan: all vehicles with Availability > 0 ----
+            # -------- Build eligibility masks based on thresholds --------
+            # Base: positive availability
+            base_mask = vdf["Availability ($)"] > 0
+
+            # EBITDA threshold: if Min EBITDA is 0, ignore it
+            ebitda_ok = (vdf["Min EBITDA ($mm)"] <= 0) | (
+                vdf["Min EBITDA ($mm)"] <= deal_ebitda
+            )
+
+            # Spread threshold: if Min Spread is 0, ignore it
+            spread_ok = (vdf["Min Spread (bps)"] <= 0) | (
+                vdf["Min Spread (bps)"] <= deal_spread
+            )
+
+            # Combined "deal-level" eligibility (before facility toggles)
+            deal_eligible_mask = base_mask & ebitda_ok & spread_ok
+
+            # ---- Term Loan: availability + thresholds ----
             if tl_total > 0:
-                tl_elig = vdf[vdf["Availability ($)"] > 0].copy()
+                tl_elig = vdf[deal_eligible_mask].copy()
                 weights = tl_elig.set_index("Vehicle")["Availability ($)"]
                 den = float(weights.sum())
                 if den > 0:
                     shares = weights / den  # sum(shares) = 1
                     alloc_term = shares.reindex(vehicles).fillna(0.0) * tl_total
 
-            # ---- Revolver: Availability > 0 AND Revolver On ----
+            # ---- Revolver: availability + thresholds + Revolver On ----
             if rev_total > 0:
-                rev_elig = vdf[
-                    (vdf["Availability ($)"] > 0) & (vdf["Revolver On"])
-                ].copy()
+                rev_elig_mask = deal_eligible_mask & vdf["Revolver On"]
+                rev_elig = vdf[rev_elig_mask].copy()
                 weights = rev_elig.set_index("Vehicle")["Availability ($)"]
                 den = float(weights.sum())
                 if den > 0:
                     shares = weights / den
                     alloc_rev = shares.reindex(vehicles).fillna(0.0) * rev_total
 
-            # ---- DDTL: Availability > 0 AND DDTL On ----
+            # ---- DDTL: availability + thresholds + DDTL On ----
             if ddtl_total > 0:
-                ddtl_elig = vdf[
-                    (vdf["Availability ($)"] > 0) & (vdf["DDTL On"])
-                ].copy()
+                ddtl_elig_mask = deal_eligible_mask & vdf["DDTL On"]
+                ddtl_elig = vdf[ddtl_elig_mask].copy()
                 weights = ddtl_elig.set_index("Vehicle")["Availability ($)"]
                 den = float(weights.sum())
                 if den > 0:
@@ -515,7 +550,6 @@ if st.button("Calculate Allocations"):
 else:
     st.info(
         "Edit the Deals and Vehicles tables above, then click **Calculate Allocations** "
-        "to compute pro-rata allocations by facility and vehicle, plus each vehicle's "
-        "pro-rata and % of its Target Hold used for each deal."
+        "to compute pro-rata allocations by facility and vehicle, with deal-level "
+        "eligibility driven by Min EBITDA and Min Spread thresholds per vehicle."
     )
-
